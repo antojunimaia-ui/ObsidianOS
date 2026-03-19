@@ -209,7 +209,7 @@ ObsidianOS/
 
 ```bash
 # 1. Clone o repositório
-git clone <url-do-repositorio>
+git clone https://github.com/antojunimaia-ui/ObsidianOS.git
 cd ObsidianOS
 
 # 2. Instale as dependências
