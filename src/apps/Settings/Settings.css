@@ -1,0 +1,109 @@
+/* Settings Styles */
+.settings-app { display: flex; height: 100%; background: var(--bg-primary); }
+
+.settings-sidebar { width: 280px; background: var(--bg-secondary); border-right: 1px solid var(--border-subtle); display: flex; flex-direction: column; flex-shrink: 0; }
+.settings-sidebar-header { padding: 20px 16px; }
+.settings-user-info { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--radius-md); cursor: pointer; transition: background var(--transition-fast); }
+.settings-user-info:hover { background: var(--bg-hover); }
+.settings-avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-hover)); display: flex; align-items: center; justify-content: center; color: white; flex-shrink: 0; }
+
+.settings-nav { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; overflow-y: auto; flex: 1; }
+.settings-nav-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border: none; background: none; color: var(--text-secondary); font-size: var(--font-size-base); cursor: pointer; border-radius: var(--radius-md); font-family: var(--font-family); text-align: left; transition: all var(--transition-fast); }
+.settings-nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.settings-nav-item.active { background: var(--accent-subtle); color: var(--text-accent); }
+.settings-nav-icon { font-size: 18px; width: 24px; text-align: center; }
+
+.settings-content { flex: 1; overflow-y: auto; }
+.settings-content-inner { padding: 32px 40px; max-width: 800px; }
+.settings-content-inner h2 { font-size: var(--font-size-2xl); font-weight: 600; color: var(--text-primary); margin-bottom: 24px; }
+
+.settings-card { background: var(--bg-secondary); border-radius: var(--radius-lg); padding: 20px 24px; margin-bottom: 16px; border: 1px solid var(--border-subtle); }
+.settings-card h3 { font-size: var(--font-size-base); font-weight: 600; color: var(--text-primary); margin-bottom: 16px; }
+
+/* Theme Selector */
+.settings-theme-selector { display: flex; gap: 16px; }
+.theme-option { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px; border: 2px solid var(--border-default); background: none; border-radius: var(--radius-md); cursor: pointer; transition: all var(--transition-normal); color: var(--text-secondary); font-family: var(--font-family); font-size: var(--font-size-sm); }
+.theme-option.active { border-color: var(--accent); }
+.theme-preview { width: 100px; height: 64px; border-radius: var(--radius-sm); }
+.dark-preview { background: linear-gradient(135deg, #1a1a24, #111118); }
+.light-preview { background: linear-gradient(135deg, #f5f5f5, #e5e5e5); }
+
+/* Accent Grid */
+.settings-accent-grid { display: flex; gap: 8px; flex-wrap: wrap; }
+.accent-option { width: 40px; height: 40px; border-radius: 50%; border: 3px solid transparent; cursor: pointer; transition: all var(--transition-fast); }
+.accent-option:hover { transform: scale(1.1); }
+.accent-option.active { border-color: var(--text-primary); box-shadow: 0 0 0 2px var(--bg-primary), 0 0 0 4px currentColor; }
+
+/* Toggle */
+.settings-toggle-row { display: flex; align-items: center; justify-content: space-between; }
+.settings-label { font-size: var(--font-size-base); color: var(--text-primary); display: block; }
+.settings-desc { font-size: var(--font-size-sm); color: var(--text-tertiary); display: block; margin-top: 2px; }
+.settings-toggle { width: 44px; height: 24px; border-radius: 12px; border: 2px solid var(--text-tertiary); background: transparent; cursor: pointer; position: relative; transition: all var(--transition-normal); flex-shrink: 0; }
+.settings-toggle.on { background: var(--accent); border-color: var(--accent); }
+.toggle-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--text-secondary); position: absolute; top: 3px; left: 3px; transition: all var(--transition-normal); }
+.settings-toggle.on .toggle-thumb { left: 23px; background: white; }
+
+/* Slider */
+.settings-slider-row { display: flex; align-items: center; gap: 12px; }
+.settings-slider { flex: 1; height: 4px; -webkit-appearance: none; appearance: none; background: var(--bg-elevated); border-radius: 2px; outline: none; }
+.settings-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--accent); cursor: pointer; border: 2px solid white; box-shadow: var(--shadow-sm); }
+
+/* About */
+.about-card { display: flex; flex-direction: column; align-items: center; gap: 20px; padding: 32px; }
+.about-logo { filter: drop-shadow(0 4px 12px rgba(99, 102, 241, 0.3)); }
+.about-info { width: 100%; }
+.about-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-subtle); font-size: var(--font-size-sm); }
+.about-row span:first-child { color: var(--text-secondary); }
+.about-row span:last-child { color: var(--text-primary); font-weight: 500; }
+
+/* Wallpaper Selector */
+.settings-wallpaper-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.wallpaper-option {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: none;
+  border: 2px solid transparent;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  text-align: center;
+}
+
+.wallpaper-option:hover {
+  background: var(--bg-hover);
+}
+
+.wallpaper-option.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.wallpaper-thumb {
+  width: 100%;
+  aspect-ratio: 16/9;
+  background-size: cover;
+  background-position: center;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-elevated);
+}
+
+.wallpaper-label {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wallpaper-option.active .wallpaper-label {
+  color: var(--accent);
+}
