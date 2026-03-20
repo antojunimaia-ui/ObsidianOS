@@ -20,6 +20,7 @@ type OpenWindowConfig = {
   minHeight?: number;
   isResizable?: boolean;
   processId: number;
+  params?: any;
 };
 
 interface WindowManagerState {

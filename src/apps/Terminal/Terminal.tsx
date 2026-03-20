@@ -4,7 +4,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useFileSystem } from '../../stores/fileSystem';
 import { useRegistry } from '../../stores/registry';
+import { useWindowManager } from '../../stores/windowManager';
 import { useProcessManager } from '../../stores/processManager';
+import type { Process } from '../../types';
 import kernel from '../../core/kernel';
 import './Terminal.css';
 
@@ -13,7 +15,7 @@ interface TerminalLine {
   content: string;
 }
 
-export default function TerminalApp({}: { windowId: string }) {
+export default function TerminalApp({ windowId }: { windowId: string }) {
   const [lines, setLines] = useState<TerminalLine[]>([
     { type: 'system', content: 'ObsidianOS [Version 24H2 Build 26100]' },
     { type: 'system', content: '(c) Obsidian Corporation. Todos os direitos reservados.' },
@@ -37,6 +39,32 @@ export default function TerminalApp({}: { windowId: string }) {
   const addOutput = useCallback((content: string, type: TerminalLine['type'] = 'output') => {
     setLines(prev => [...prev, { type, content }]);
   }, []);
+
+  // Listen for real binary output
+  useEffect(() => {
+    const unsubOut = kernel.on('process:stdout', (data: { pid: number, message: string }) => {
+      addOutput(data.message, 'output');
+    });
+    const unsubErr = kernel.on('process:stderr', (data: { pid: number, message: string }) => {
+      addOutput(data.message, 'error');
+    });
+
+    return () => {
+      unsubOut();
+      unsubErr();
+    };
+  }, [addOutput]);
+
+  const { getWindow } = useWindowManager();
+  const executeCommandRef = useRef<((c: string) => void) | null>(null);
+
+  // Handle initial command from window params
+  useEffect(() => {
+    const win = getWindow(windowId);
+    if (win?.params?.command && executeCommandRef.current) {
+       executeCommandRef.current(win.params.command);
+    }
+  }, [windowId, getWindow]);
 
   const executeCommand = useCallback((cmd: string) => {
     const trimmed = cmd.trim();
@@ -212,7 +240,7 @@ export default function TerminalApp({}: { windowId: string }) {
         addOutput('');
         addOutput('Nome da Imagem                   PID   Mem. (MB)  CPU %');
         addOutput('================================ ===== ========== =====');
-        processes.forEach(p => {
+        processes.forEach((p: Process) => {
           const name = p.name.padEnd(33);
           const pid = p.pid.toString().padStart(5);
           const mem = p.memoryUsage.toFixed(1).padStart(10);
@@ -317,9 +345,34 @@ export default function TerminalApp({}: { windowId: string }) {
         });
         break;
 
-      default:
-        addOutput(`'${command}' não é reconhecido como um comando interno ou externo.`, 'error');
-        addOutput(`Digite 'help' para ver os comandos disponíveis.`, 'system');
+      default: {
+        // Try to find a real binary in System32 or current path
+        const binaryName = command.endsWith('.exe') ? command : `${command}.exe`;
+        
+        const isAbsolutePath = binaryName.startsWith('C:');
+        const paths = isAbsolutePath ? [binaryName] : [`${currentPath}\\${binaryName}`, `C:\\ObsidianOS\\System32\\${binaryName}`];
+        
+        let foundNode = null;
+        let foundPath = '';
+        
+        for (const p of paths) {
+          const node = getNode(p);
+          if (node && node.type === 'file') {
+            foundNode = node;
+            foundPath = p;
+            break;
+          }
+        }
+
+        if (foundNode) {
+          addOutput(`Running ${foundPath}...`, 'system');
+          kernel.createProcess(command, foundNode.metadata?.description || command, '⚙️', undefined, foundPath, args);
+        } else {
+          addOutput(`'${command}' não é reconhecido como um comando interno ou externo.`, 'error');
+          addOutput(`Digite 'help' para ver os comandos disponíveis.`, 'system');
+        }
+        break;
+      }
     }
   }, [currentPath, addOutput, getNode, getChildren, createFile, createDirectory, deleteNode, processes, hives, kernel]);
 
@@ -356,6 +409,8 @@ export default function TerminalApp({}: { windowId: string }) {
       }
     }
   };
+
+  executeCommandRef.current = executeCommand;
 
   return (
     <div className="terminal" onClick={() => inputRef.current?.focus()}>

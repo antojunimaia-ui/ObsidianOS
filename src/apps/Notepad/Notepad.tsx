@@ -8,20 +8,35 @@ import { useProcess } from '../../contexts/ProcessContext';
 import './Notepad.css';
 
 export default function NotepadApp({ windowId }: { windowId: string }) {
+  const { pid } = useProcess();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { getWindow, updateWindowTitle } = useWindowManager();
+  const { getNode, updateFileContent } = useFileSystem();
+
   const [content, setContent] = useState('');
-  const [fileName] = useState('Sem título');
-  const [filePath] = useState('');
+  const [fileName, setFileName] = useState('Sem título');
+  const [filePath, setFilePath] = useState('');
   const [isModified, setIsModified] = useState(false);
+  const [fontSize, setFontSize] = useState(14);
   const [showStatusBar] = useState(true);
   const [cursorLine, setCursorLine] = useState(1);
   const [cursorCol, setCursorCol] = useState(1);
   const [wordWrap] = useState(true);
-  const [fontSize, setFontSize] = useState(14);
-  
-  const { pid } = useProcess();
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const updateWindowTitle = useWindowManager(s => s.updateWindowTitle);
-  const { updateFileContent } = useFileSystem();
+
+  // Initialize from window params (file path)
+  useEffect(() => {
+    const win = getWindow(windowId);
+    if (win?.params?.filePath) {
+      const path = win.params.filePath;
+      const node = getNode(path);
+      if (node && node.type === 'file') {
+        setContent(node.content || '');
+        setFileName(node.name);
+        setFilePath(path);
+        setIsModified(false);
+      }
+    }
+  }, [windowId, getWindow, getNode]);
 
   useEffect(() => {
     updateWindowTitle(windowId, `${fileName}${isModified ? ' •' : ''} - Bloco de Notas`);

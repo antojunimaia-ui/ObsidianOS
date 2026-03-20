@@ -37,6 +37,7 @@ export interface WindowState {
   isMinimizable: boolean;
   isMaximizable: boolean;
   processId: number;
+  params?: any;
   prevBounds?: { x: number; y: number; width: number; height: number };
 }
 

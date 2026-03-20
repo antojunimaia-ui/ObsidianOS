@@ -56,21 +56,35 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
       let titlePrefix = `${node.name} - `;
       
       if (ext === 'exe') {
-        try {
-          if (node.content && node.content.startsWith('{')) {
+        const isApp = node.metadata?.type === 'app_executable' || (node.content && node.content.startsWith('{'));
+        const isBinary = node.metadata?.type === 'binary_executable';
+
+        if (isApp) {
+          try {
             const manifest = JSON.parse(node.content);
-            if (manifest.type === 'executable' && manifest.appId) {
-              targetAppId = manifest.appId;
-              titlePrefix = ''; // Just use app name for executables
-            }
-          } else {
-             // System binary or DLL
-             kernel.log('INFO', 'Explorer', `Cannot execute system binary: ${node.name}`);
-             return;
+            targetAppId = manifest.appId || 'notepad';
+            titlePrefix = '';
+          } catch (e) {
+            kernel.log('WARN', 'Explorer', `Invalid executable manifest: ${node.name}`);
+            return;
           }
-        } catch (e) {
-          kernel.log('WARN', 'Explorer', `Invalid executable manifest: ${node.name}`);
-          return;
+        } else if (isBinary) {
+          // Native binary: Run it in a Terminal
+          const terminalApp = apps['terminal'];
+          if (terminalApp) {
+            const pid = createProcess(terminalApp.id, terminalApp.name, '💻');
+            openWindow({
+              title: `Executando ${node.name} - Terminal`,
+              icon: '💻', appId: 'terminal',
+              processId: pid,
+              width: 700, height: 450,
+              params: { command: node.path } // Tell terminal to run this file
+            });
+            return;
+          }
+        } else {
+           kernel.log('INFO', 'Explorer', `Cannot execute system driver or library: ${node.name}`);
+           return;
         }
       } else {
         targetAppId = (ext === 'txt' || ext === 'ini' || ext === 'js' || ext === 'json') ? 'notepad' : 
@@ -92,6 +106,7 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
           width: app.defaultWidth,
           height: app.defaultHeight,
           processId: pid,
+          params: { filePath: node.path }
         });
       } else {
         kernel.log('ERROR', 'Explorer', `Application '${targetAppId}' not found in registry.`);

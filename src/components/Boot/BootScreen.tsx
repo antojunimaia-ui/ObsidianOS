@@ -1,6 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
 import { useSystem } from '../../stores/systemStore';
-import { bootSequence, loadShell } from '../../core/bootSequence';
 import kernel from '../../core/kernel';
 import './Boot.css';
 
@@ -20,47 +19,51 @@ export default function BootScreen() {
     setLogs([]);
     setShowLogo(false);
     
-    let isMounted = true;
-    
     // Subscribe to kernel events
     const unsubscribePhase = kernel.on('bootPhaseChange', (phase: string) => {
-      if (!isMounted) return;
       setKernelPhase(phase);
     });
 
     const unsubscribeLog = kernel.on('bootLog', (msg: string) => {
-      if (!isMounted) return;
-      setLogs(prev => [...prev.slice(-40), msg]); // Keep last 40 logs
-      // Auto-scroll to bottom of logs
+      setLogs(prev => [...prev.slice(-40), msg]);
       if (logEndRef.current) {
         logEndRef.current.scrollIntoView({ behavior: 'smooth' });
       }
     });
 
+    const onBootFinished = async () => {
+      // Transition to graphical boot
+      setShowLogo(true);
+      // Let user see the logo for a bit
+      await new Promise(r => setTimeout(r, 2000));
+      // Load shell
+      await kernel.loadShell();
+      // Ready for login
+      setBootPhase('login');
+    };
+
     const runBoot = async () => {
       // Small visual delay before BIOS POST
       await new Promise(r => setTimeout(r, 500));
-      
-      const bootSuccess = await bootSequence();
-      
-      if (bootSuccess && isMounted) {
-        // Transition to graphical boot
-        setShowLogo(true);
-        // Let user see the logo for a bit
-        await new Promise(r => setTimeout(r, 2000));
-        
-        // Wait for shell check (this doesn't load it visually yet, just starts the process)
-        await loadShell();
-        
-        // Ready for login
-        setBootPhase('login');
+
+      // If boot already finished (e.g. StrictMode remount), run directly
+      if (kernel.isBootFinished) {
+        onBootFinished();
+        return;
+      }
+
+      // Register listener BEFORE powerOn to avoid race condition
+      kernel.once('boot:finished', onBootFinished);
+
+      // Only trigger powerOn if not already booting
+      if (!kernel.isBooting) {
+        kernel.powerOn();
       }
     };
 
     runBoot();
 
     return () => {
-      isMounted = false;
       unsubscribePhase();
       unsubscribeLog();
     };

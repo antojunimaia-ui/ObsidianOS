@@ -10,7 +10,7 @@ const defaultAttributes = { isReadOnly: false, isHidden: false, isSystem: false,
 const sysPermissions = { read: true, write: false, execute: true, hidden: false, system: true };
 const sysAttributes = { isReadOnly: true, isHidden: false, isSystem: true, isArchive: false };
 
-function makeDir(path: string, name: string, parentPath: string, sys = false): FileSystemNode {
+export function makeDir(path: string, name: string, parentPath: string, sys = false): FileSystemNode {
   return {
     id: path, name, type: 'directory', path, parentPath, size: 0,
     createdAt: now, modifiedAt: now, accessedAt: now,
@@ -20,7 +20,7 @@ function makeDir(path: string, name: string, parentPath: string, sys = false): F
   };
 }
 
-function makeFile(path: string, name: string, parentPath: string, ext: string, content = '', size = 0): FileSystemNode {
+export function makeFile(path: string, name: string, parentPath: string, ext: string, content = '', size = 0): FileSystemNode {
   return {
     id: path, name, type: 'file', path, parentPath, size: size || content.length,
     extension: ext, content,
@@ -62,8 +62,20 @@ function makeAppExe(path: string, name: string, parentPath: string, appId: strin
   };
 }
 
+function makeBinaryExe(path: string, name: string, parentPath: string, code: string): FileSystemNode {
+  return {
+    id: path, name, type: 'file', path, parentPath,
+    size: code.length,
+    extension: 'exe',
+    content: code,
+    createdAt: now, modifiedAt: now, accessedAt: now,
+    permissions: sysPermissions, attributes: sysAttributes,
+    metadata: { type: 'binary_executable' },
+  };
+}
+
 // Build a realistic file system
-const defaultNodes: Record<string, FileSystemNode> = {};
+export const defaultNodes: Record<string, FileSystemNode> = {};
 
 // Root drives and directories
 const dirs = [
@@ -81,6 +93,10 @@ const dirs = [
   ['C:\\ObsidianOS\\Logs', 'Logs', 'C:\\ObsidianOS', false],
   ['C:\\ObsidianOS\\INF', 'INF', 'C:\\ObsidianOS', true],
   ['C:\\ObsidianOS\\SysWOW64', 'SysWOW64', 'C:\\ObsidianOS', true],
+  ['C:\\ObsidianOS\\SDK', 'SDK', 'C:\\ObsidianOS', true],
+  ['C:\\ObsidianOS\\SDK\\lib', 'lib', 'C:\\ObsidianOS\\SDK', true],
+  ['C:\\ObsidianOS\\SDK\\docs', 'docs', 'C:\\ObsidianOS\\SDK', true],
+  ['C:\\ObsidianOS\\SDK\\examples', 'examples', 'C:\\ObsidianOS\\SDK', true],
   ['C:\\Program Files', 'Program Files', 'C:', true],
   ['C:\\Program Files\\ObsidianOS Apps', 'ObsidianOS Apps', 'C:\\Program Files', true],
   ['C:\\Program Files (x86)', 'Program Files (x86)', 'C:', true],
@@ -120,6 +136,7 @@ const systemExes: [string, string, string, string][] = [
   ['C:\\ObsidianOS\\System32\\lsass.exe', 'lsass.exe', 'C:\\ObsidianOS\\System32', 'Local Security Authority Process'],
   ['C:\\ObsidianOS\\System32\\svchost.exe', 'svchost.exe', 'C:\\ObsidianOS\\System32', 'Host Process for Services'],
   ['C:\\ObsidianOS\\System32\\dwm.exe', 'dwm.exe', 'C:\\ObsidianOS\\System32', 'Desktop Window Manager'],
+  ['C:\\ObsidianOS\\System32\\explorer.exe', 'explorer.exe', 'C:\\ObsidianOS\\System32', 'ObsidianOS Shell'],
   // Additional system executables
   ['C:\\ObsidianOS\\System32\\conhost.exe', 'conhost.exe', 'C:\\ObsidianOS\\System32', 'Console Window Host'],
   ['C:\\ObsidianOS\\System32\\SearchHost.exe', 'SearchHost.exe', 'C:\\ObsidianOS\\System32', 'Search Host Process'],
@@ -145,6 +162,185 @@ const systemExes: [string, string, string, string][] = [
   ['C:\\ObsidianOS\\System32\\bcryptprimitives.dll', 'bcryptprimitives.dll', 'C:\\ObsidianOS\\System32', 'Cryptographic Primitives Library'],
 ];
 
+const binaryExes: [string, string, string, string][] = [
+  [
+    'C:\\ObsidianOS\\System32\\ping.exe', 
+    'ping.exe', 
+    'C:\\ObsidianOS\\System32', 
+    `
+      const target = OS.args[0] || '127.0.0.1';
+      OS.print(\`Pinging \${target} with 32 bytes of data:\`);
+      for(let i=0; i<4; i++) {
+        await OS.wait(1000);
+        const res = OS.ping();
+        OS.print(\`Reply from \${target}: bytes=32 time=\${res.latency}ms TTL=128\`);
+      }
+      OS.terminate(0);
+    `
+  ],
+  [
+    'C:\\ObsidianOS\\System32\\ls.exe', 
+    'ls.exe', 
+    'C:\\ObsidianOS\\System32', 
+    `
+      const path = OS.args[0] || '.';
+      const files = OS.listFiles(path);
+      OS.print(\`Directory of \${path}:\`);
+      files.forEach(f => OS.print(\`  \${f}\`));
+      OS.terminate(0);
+    `
+  ],
+  [
+    'C:\\ObsidianOS\\System32\\sysinfo.exe', 
+    'sysinfo.exe', 
+    'C:\\ObsidianOS\\System32', 
+    `
+      const res = OS.getResources();
+      OS.print("--- SYSTEM INFORMATION ---");
+      OS.print(\`OS: \${OS.getEnv('OS')}\`);
+      OS.print(\`Memory: \${Math.floor(res.usedMemory)} MB / \${res.totalMemory} MB\`);
+      OS.print(\`Uptime: \${res.uptime} seconds\`);
+      OS.print(\`CPU Cores: \${res.cpuCores}\`);
+      OS.terminate(0);
+    `
+  ],
+  [
+    'C:\\ObsidianOS\\System32\\bootmgr.exe',
+    'bootmgr.exe',
+    'C:\\ObsidianOS\\System32',
+    `
+// ============================================
+// OBSIDIAN OS NATIVE BOOT MANAGER (BOOTMGR)
+// ============================================
+// Performs the actual OS load from files.
+
+OS.addBootLog('BootMgr: Initializing boot flow...');
+
+// 1. Read boot.ini
+OS.addBootLog('BootMgr: Reading boot.ini...');
+const bootConfig = OS.readFile('C:\\\\ObsidianOS\\\\System32\\\\boot.ini');
+if (!bootConfig) {
+  OS.triggerBSOD({ stopCode: 'BOOT_LOADER_FAILURE', technicalInfo: 'boot.ini missing' });
+  return;
+}
+
+// 2. Parse Logic
+const timeoutMatch = bootConfig.match(/timeout=(\\d+)/i);
+const timeout = timeoutMatch ? parseInt(timeoutMatch[1], 10) : 3;
+const defaultArcMatch = bootConfig.match(/default=(.*)/i);
+const arcPath = defaultArcMatch ? defaultArcMatch[1].trim() : '';
+
+OS.addBootLog('BootMgr: OS Target -> ' + arcPath);
+if (!arcPath.includes('partition(1)')) {
+  OS.triggerBSOD({ stopCode: 'INACCESSIBLE_BOOT_DEVICE', technicalInfo: 'Arc Path Partition Fail' });
+  return;
+}
+
+// 3. Find System Folder (Fuzzy check)
+const sysRootMatch = arcPath.match(/partition\(1\)\\\\(.*)/i);
+const sysRoot = (sysRootMatch && sysRootMatch[1]) ? sysRootMatch[1].trim() : 'ObsidianOS';
+
+// List files on C: (the root)
+const files = OS.listFiles('C:');
+const actualRoot = files.find(f => f.toLowerCase() === sysRoot.toLowerCase());
+
+if (!actualRoot) {
+  OS.triggerBSOD({ stopCode: 'BOOT_LOADER_FAILURE', technicalInfo: 'System folder not found: ' + sysRoot + ' on C:' });
+  return;
+}
+OS.addBootLog('BootMgr: System Root -> C:\\\\' + actualRoot + ' [OK]');
+
+// 4. Load Kernel
+OS.setBootPhase('KERNEL_INIT');
+OS.addBootLog('BootMgr: Loading ntoskrnl.exe...');
+const kernelCode = OS.readFile('C:\\\\' + actualRoot + '\\\\System32\\\\ntoskrnl.exe');
+if(!kernelCode) { OS.triggerBSOD({ stopCode: 'KERNEL_DATA_INPAGE_ERROR', technicalInfo: 'ntoskrnl.exe missing' }); return; }
+OS.allocateMemory(64, 'ntoskrnl.exe');
+OS.createProcess('System', 'System Process', '⚙️');
+
+// 5. Load Drivers
+OS.setBootPhase('DRIVER_LOAD');
+const drivers = ['ntfs.sys', 'disk.sys', 'display.sys', 'hid.sys', 'netio.sys'];
+OS.addBootLog('BootMgr: Loading drivers...');
+for(const d of drivers) {
+   OS.registerDriver({ name: d, status: 'loaded', type: 'kernel' });
+   OS.addBootLog('  ✓ ' + d);
+}
+
+// 6. Finishing
+OS.setBootPhase('SERVICE_INIT');
+OS.addBootLog('BootMgr: Enabling user session...');
+OS.finalizeBoot();
+OS.terminate(0);
+    `.trim()
+  ]
+];
+
+const sdkFiles: [string, string, string, string][] = [
+  [
+    'C:\\ObsidianOS\\SDK\\lib\\obsidian.js',
+    'obsidian.js',
+    'C:\\ObsidianOS\\SDK\\lib',
+    `
+// ObsidianOS Runtime Library (Standard SDK)
+var StdIO = {
+  print: (m) => OS.print(m),
+  error: (m) => OS.error(m),
+  clear: () => OS.print("\u001b[2J\u001b[H")
+};
+var FS = {
+  read: (p) => OS.readFile(p),
+  write: (p, c) => OS.writeFile(p, c),
+  ls: (p) => OS.listFiles(p)
+};
+var Proc = {
+  pid: OS.pid,
+  args: OS.args,
+  exit: (c) => OS.terminate(c),
+  wait: (ms) => OS.wait(ms)
+};
+var Kernel = {
+  uptime: () => OS.getResources().uptime,
+  ping: () => OS.ping()
+};
+var print = StdIO.print;
+    `.trim()
+  ],
+  [
+    'C:\\ObsidianOS\\SDK\\docs\\syscalls.txt',
+    'syscalls.txt',
+    'C:\\ObsidianOS\\SDK\\docs',
+    `
+--- OBSIDIAN OS NATIVE SYSTEM CALLS ---
+Version: 1.0.0-GA
+
+1. OS.print(msg)            - Sends text to stdout
+2. OS.error(msg)            - Sends text to stderr
+3. OS.readFile(path)        - Reads file content (UTF-8)
+4. OS.writeFile(path, val)  - Writes/Creates file
+5. OS.listFiles(path)       - Returns array of node names
+6. OS.wait(ms)              - Suspends process execution (async)
+7. OS.terminate(code)       - Halts execution and frees memory
+8. OS.getResources()        - Dumps current CPU/RAM metrics
+    `.trim()
+  ],
+  [
+    'C:\\ObsidianOS\\SDK\\examples\\hello_world.exe',
+    'hello_world.exe',
+    'C:\\ObsidianOS\\SDK\\examples',
+    `
+// Hello World Example using SDK
+StdIO.print("--- Hello from the SDK ---");
+StdIO.print("PID: " + Proc.pid);
+StdIO.print("Running on: " + OS.getEnv('OS'));
+await Proc.wait(500);
+StdIO.print("Closing in 1 second...");
+await Proc.wait(1000);
+Proc.exit(0);
+    `.trim()
+  ]
+];
+
 const appExes: [string, string, string, string, string, string, string][] = [
   ['C:\\Program Files\\ObsidianOS Apps\\notepad.exe', 'notepad.exe', 'C:\\Program Files\\ObsidianOS Apps', 'notepad', '📝', 'productivity', 'Bloco de Notas'],
   ['C:\\Program Files\\ObsidianOS Apps\\calc.exe', 'calc.exe', 'C:\\Program Files\\ObsidianOS Apps', 'calculator', '🧮', 'utilities', 'Calculadora'],
@@ -162,6 +358,18 @@ systemExes.forEach(([path, name, parent, desc]) => {
 
 appExes.forEach(([path, name, parent, appId, icon, cat, display]) => {
   defaultNodes[path] = makeAppExe(path, name, parent, appId, icon, cat, display);
+});
+
+binaryExes.forEach(([path, name, parent, code]) => {
+  defaultNodes[path] = makeBinaryExe(path, name, parent, code);
+});
+
+sdkFiles.forEach(([path, name, parent, code]) => {
+  if (path.endsWith('.exe')) {
+     defaultNodes[path] = makeBinaryExe(path, name, parent, code);
+  } else {
+     defaultNodes[path] = makeFile(path, name, parent, path.split('.').pop() || 'txt', code);
+  }
 });
 
 // =====================================================
@@ -209,5 +417,3 @@ const files: [string, string, string, string, string, number][] = [
 files.forEach(([path, name, parent, ext, content, size]) => {
   defaultNodes[path] = makeFile(path, name, parent, ext, content, size);
 });
-
-export { defaultNodes, makeFile, makeDir };

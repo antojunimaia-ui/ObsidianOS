@@ -17,6 +17,8 @@ import StartMenu from './components/StartMenu/StartMenu';
 import WindowRenderer from './components/Window/WindowRenderer';
 import { useContextMenuStore } from './stores/contextMenuStore';
 import ContextMenu from './components/ContextMenu/ContextMenu';
+import { NotificationContainer } from './components/Notifications/NotificationContainer';
+import { NotificationCenter } from './components/Notifications/NotificationCenter';
 import './index.css';
 
 export default function App() {
@@ -218,6 +220,10 @@ export default function App() {
               {explorerRunning && <Taskbar />}
             </>
           )}
+
+          {/* Global Notifications */}
+          <NotificationContainer />
+          <NotificationCenter />
 
           {/* Global Context Menu */}
           {isOpen && (

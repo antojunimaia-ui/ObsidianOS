@@ -8,7 +8,7 @@ import { useProcessManager } from '../stores/processManager';
 interface ProcessContextType {
   pid: number;
   process: Process | undefined;
-  env: Record<string, string>; // Environment variables simulation
+  env: Record<string, string>; // Environment variables
   terminate: () => void;
 }
 

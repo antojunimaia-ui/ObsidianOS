@@ -96,16 +96,16 @@ export default function BSOD({ info }: BSODProps) {
             <p>Para obter mais informações sobre esse problema e correções possíveis, visite<br/>https://www.obsidianos.org/stopcode</p>
             <br/>
             <p>Se você ligar para o suporte, forneça as seguintes informações:</p>
-            <p className="bsod-stopcode">Código de parada: {info.stopCode}</p>
-            <p className="bsod-failed">O que falhou: {info.failedComponent}</p>
+            <p className="bsod-stopcode">Código de parada: {info.stopCode || 'CRITICAL_PROCESS_DIED'}</p>
+            <p className="bsod-failed">O que falhou: {info.failedComponent || 'Unknown System Component'}</p>
           </div>
         </div>
         
         <div className="bsod-tech-inner">
           <p>*** TECHNICAL INFORMATION ***</p>
-          <p>BUG CHECK CODE: {info.bugCheckCode}</p>
-          <p>PARAMETERS: {info.parameters.join(', ')}</p>
-          <p>INFO: {info.technicalInfo}</p>
+          <p>BUG CHECK CODE: {info.bugCheckCode || '0x00000000'}</p>
+          <p>PARAMETERS: {info.parameters?.join(', ') || '0x0, 0x0, 0x0, 0x0'}</p>
+          <p>INFO: {info.technicalInfo || 'No technical information available.'}</p>
         </div>
       </div>
     </div>

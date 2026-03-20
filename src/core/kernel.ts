@@ -102,6 +102,8 @@ class Kernel {
   private _uptimeInterval: ReturnType<typeof setInterval> | null = null;
   private _initTime: number = 0;
   private _isInitialized: boolean = false;
+  private _isBooting: boolean = false;
+  private _isBootFinished: boolean = false;
 
   // ── Process Table ──────────────────────────────────────────────────────────
   private _processes: Map<number, Process> = new Map();
@@ -149,6 +151,104 @@ class Kernel {
     this._initRegistry();
     this._initSystemProcesses();
   }
+
+  // ========== THE BIOS (NATIVE BOOT) ==========
+  async powerOn() {
+    if (this._isBooting) return;
+    this._isBooting = true;
+    try {
+      this.reset();
+      this.fsRepairSystemFiles(); // Ensure bootmgr.exe is up to date
+      this._isBootFinished = false; // Fresh start
+      this.bootPhase = 'BIOS_POST';
+      this.addBootLog('ObsidianOS BIOS v2.4.0');
+      this.addBootLog('Checking Hardware... OK');
+      
+      this.bootPhase = 'BIOS_HARDWARE';
+      this.addBootLog('Scanning for drives... Done [C: FIXED]');
+      
+      let bootmgr = this.fsGetNode('C:\\ObsidianOS\\System32\\bootmgr.exe');
+      if (!bootmgr) {
+        this.addBootLog('BOOTMGR not found. Starting Auto-Repair...');
+        this.fsDeepReformat();
+        bootmgr = this.fsGetNode('C:\\ObsidianOS\\System32\\bootmgr.exe');
+        if (!bootmgr) throw new Error('SYSTEM_REPAIR_FAILED');
+        this.addBootLog('Auto-Repair Success. BOOTMGR Restored.');
+      }
+
+      this.addBootLog('Locating Bootloader... Found [C:\\ObsidianOS\\System32\\bootmgr.exe]');
+      this.bootPhase = 'BOOTLOADER';
+      this.addBootLog('Handing over control to Boot Manager...');
+      
+      const pid = this.createProcess('bootmgr.exe', 'Boot Manager', '⚙️');
+      this.executeBinary(pid, 'C:\\ObsidianOS\\System32\\bootmgr.exe');
+    } catch (e: any) {
+      this.log('ERROR', 'BIOS', `Hardware Failure: ${e.message}`);
+      this.addBootLog('!!! BIOS HARDWARE FAILURE !!!');
+      this.addBootLog('Reason: ' + e.message);
+      this.bootPhase = 'BOOT_FAILURE';
+    }
+  }
+
+  finalizeBoot() {
+    this.addBootLog('Native Boot Handoff... OK');
+    this.log('INFO', 'Kernel', 'Boot Manager handoff successful.');
+    
+    // Give UI thread a moment before signals change
+    setTimeout(() => {
+      this._isBooting = false;
+      this._isBootFinished = true;
+      this._isInitialized = true;
+      this.startUptimeCounter();
+      this.emit('boot:finished');
+    }, 150);
+  }
+
+  async loadShell(): Promise<boolean> {
+    const explorer = this.fsGetNode('C:\\ObsidianOS\\System32\\explorer.exe');
+    if (!explorer) {
+      this.triggerBSOD({
+        stopCode: 'SHELL_INITIALIZATION_FAILED',
+        technicalInfo: 'explorer.exe not found. Cannot load desktop shell.',
+        failedComponent: 'explorer.exe',
+        bugCheckCode: '0x000000F4',
+        parameters: ['explorer.exe', 'C:\\ObsidianOS\\System32'],
+      });
+      return false;
+    }
+
+    this.bootPhase = 'SHELL_INIT';
+    this.addBootLog('Starting Desktop Shell...');
+
+    // App Discovery — scan System32 for app manifests and register them
+    const fsProxy = {
+      getChildren: (path: string) => this.fsGetChildren(path),
+    };
+    const { useAppRegistry } = await import('./appRegistry');
+    const registryProxy = useAppRegistry.getState();
+    await this.scanSystemApps(fsProxy, registryProxy);
+    
+    // Create processes
+    this.createProcess('explorer.exe', 'ObsidianOS Explorer', '📁');
+    this._resources.usedMemory += 96;
+
+    const dwm = this.fsGetNode('C:\\ObsidianOS\\System32\\dwm.exe');
+    if (dwm) {
+      this.createProcess('dwm.exe', 'Desktop Window Manager', '🖥️');
+      this._resources.usedMemory += 72;
+    }
+
+    const searchHost = this.fsGetNode('C:\\ObsidianOS\\System32\\SearchHost.exe');
+    if (searchHost) {
+      this.createProcess('SearchHost.exe', 'Search Host', '🔍');
+      this._resources.usedMemory += 48;
+    }
+
+    this.bootPhase = 'DESKTOP_READY';
+    this.log('INFO', 'Kernel', 'Desktop environment ready');
+    return true;
+  }
+
 
   // ========== System Init ==========
   private _initSystemState() {
@@ -306,8 +406,20 @@ class Kernel {
     if (!this._listeners.has(event)) {
       this._listeners.set(event, new Set());
     }
-    this._listeners.get(event)!.add(callback);
-    return () => { this._listeners.get(event)?.delete(callback); };
+    this._listeners.get(event)?.add(callback);
+    return () => this.off(event, callback);
+  }
+
+  once(event: string, callback: (...args: any[]) => void) {
+    const wrapper = (...args: any[]) => {
+      this.off(event, wrapper);
+      callback(...args);
+    };
+    return this.on(event, wrapper);
+  }
+
+  off(event: string, callback: (...args: any[]) => void) {
+    this._listeners.get(event)?.delete(callback);
   }
 
   emit(event: string, ...args: any[]) {
@@ -348,12 +460,36 @@ class Kernel {
   }
 
   // ========== Boot Phase ==========
+  get isBooting() { return this._isBooting; }
+  get isBootFinished() { return this._isBootFinished; }
   get bootPhase() { return this._bootPhase; }
   set bootPhase(phase: BootPhase) {
     const prevPhase = this._bootPhase;
     this._bootPhase = phase;
     this.log('INFO', 'Kernel', `Boot phase: ${prevPhase} -> ${phase}`);
     this.emit('bootPhaseChange', phase, prevPhase);
+    
+    // Sync with React Store
+    const storePhaseMap: Record<string, any> = {
+      'OFF': 'off',
+      'BIOS_POST': 'bios',
+      'BIOS_HARDWARE': 'bios',
+      'BOOTLOADER': 'bios',
+      'KERNEL_INIT': 'loading',
+      'HAL_INIT': 'loading',
+      'DRIVER_LOAD': 'loading',
+      'SERVICE_INIT': 'loading',
+      'SHELL_INIT': 'loading',
+      'WINLOGON': 'login',
+      'BOOT_FAILURE': 'bios'
+      // NOTE: DESKTOP_READY is intentionally omitted — the transition to 'desktop'
+      // is handled by LockScreen after the user logs in via kernel.sysLogin()
+    };
+    try {
+      this.emit('system:bootPhase', storePhaseMap[phase] || 'loading');
+    } catch(e) {
+      console.error("Kernel Store Sync Failed", e);
+    }
   }
   
   // ========== System State Management ==========
@@ -492,7 +628,13 @@ class Kernel {
   get bsodInfo() { return this._bsodInfo; }
 
   triggerBSOD(info: BSODInfo) {
-    this._bsodInfo = info;
+    this._bsodInfo = {
+      stopCode: info.stopCode || 'CRITICAL_PROCESS_DIED',
+      technicalInfo: info.technicalInfo || 'No extra info',
+      failedComponent: info.failedComponent || 'Unknown',
+      bugCheckCode: info.bugCheckCode || '0x00000000',
+      parameters: info.parameters || ['0x0', '0x0', '0x0', '0x0'],
+    };
     this._bootPhase = 'BSOD';
     this.log('CRITICAL', 'Kernel', 
       `BSOD: ${info.stopCode} - ${info.technicalInfo}`);
@@ -590,7 +732,7 @@ class Kernel {
   }
 
   // ========== Process Management ==========
-  createProcess(name: string, title: string, icon: string, windowId?: string): number {
+  createProcess(name: string, title: string, icon: string, windowId?: string, binaryPath?: string, args: string[] = []): number {
     const pid = this._nextPid++;
     const ram = Math.random() * 80 + 30;
     this.allocateMemory(ram, name);
@@ -605,7 +747,104 @@ class Kernel {
     this._processes.set(pid, process);
     this.log('DEBUG', 'ProcessManager', `Created: ${name} [PID:${pid}]`);
     this.emit('process:created', process);
+
+    // If it's a binary file, execute its content
+    if (binaryPath) {
+      this.executeBinary(pid, binaryPath, args);
+    }
+
     return pid;
+  }
+
+  // ========== Binary Execution Engine ==========
+  async executeBinary(pid: number, path: string, args: string[] = []) {
+    const node = this.fsGetNode(path);
+    if (!node || node.type !== 'file' || !node.content) {
+      this.log('ERROR', 'ExecutionEngine', `Binary not found or corrupted: ${path}`);
+      this.terminateProcess(pid);
+      return;
+    }
+
+    const proc = this.getProcess(pid);
+    if (!proc) return;
+
+    this.log('INFO', 'ExecutionEngine', `Executing binary: ${path} [PID:${pid}] with args: ${args.join(' ')}`);
+
+    // System Calls Definition (The official OS API for binaries)
+    const OS = {
+      pid,
+      args,
+      print: (msg: string) => {
+        this.emit('process:stdout', { pid, message: msg });
+        this.log('DEBUG', `Proc:${pid}`, msg);
+      },
+      error: (msg: string) => {
+        this.emit('process:stderr', { pid, message: msg });
+        this.log('ERROR', `Proc:${pid}`, msg);
+      },
+      readFile: (p: string) => this.fsGetNode(p)?.content,
+      writeFile: (p: string, c: string) => this.fsUpdateFileContent(p, c),
+      listFiles: (p: string) => this.fsGetChildren(p).map(n => n.name),
+      getEnv: (k: string) => ({ OS: 'ObsidianOS_NT', USER: this._user.username }[k]),
+      getTimestamp: () => Date.now(),
+      getResources: () => ({ ...this._resources }),
+      terminate: (exitCode: number = 0) => {
+        this.log('INFO', 'ExecutionEngine', `Process ${pid} terminated with exit code ${exitCode}`);
+        this.terminateProcess(pid);
+      },
+      wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
+      // Hardware calls
+      ping: () => ({ status: 'online', latency: Math.floor(Math.random() * 5) + 1 }),
+      
+      // --- NATIVE BOOT CALLS ---
+      addBootLog: (m: string) => this.addBootLog(m),
+      setBootPhase: (p: any) => { this.bootPhase = p; },
+      triggerBSOD: (i: any) => this.triggerBSOD(i),
+      finalizeBoot: () => this.finalizeBoot(),
+      
+      // --- SYSTEM MGMT ---
+      allocateMemory: (s: number, n: string) => this.allocateMemory(s, n),
+      createProcess: (n: string, t: string, i: string) => this.createProcess(n, t, i),
+      registerDriver: (e: any) => { this._drivers.set(e.name, e); this.emit('driver:loaded', e); },
+      registerService: (e: any) => { this._services.set(e.name, e); this.emit('service:started', e); },
+      getDriver: (n: string) => this._drivers.get(n),
+      getService: (n: string) => this._services.get(n),
+      getAllServices: () => Array.from(this._services.values()),
+      scanSystemApps: (fs: any, reg: any) => this.scanSystemApps(fs, reg)
+    };
+
+    try {
+      // Auto-Linker: Prepends the SDK library if it exists
+      const sdkNode = this.fsGetNode('C:\\ObsidianOS\\SDK\\lib\\obsidian.js');
+      const sdkCode = sdkNode?.content || '';
+
+      // THE SANDBOX: Using Function constructor to create a scope
+      let scriptBody = '"use strict";\n';
+      scriptBody += sdkCode + ';\n';
+      scriptBody += '// ------------------\n';
+      scriptBody += 'return (async () => {\n';
+      scriptBody += '  try {\n';
+      scriptBody += (node.content || "") + '\n';
+      scriptBody += '  } catch (e) {\n';
+      scriptBody += '    OS.addBootLog("Runtime Error: " + e.message);\n';
+      scriptBody += '    OS.error("Runtime Error: " + e.message);\n';
+      scriptBody += '    OS.terminate(1);\n';
+      scriptBody += '  }\n';
+      scriptBody += '})();';
+
+      let binaryScript;
+      try {
+        binaryScript = new Function('OS', 'kernel', scriptBody);
+        binaryScript(OS, this);
+      } catch (err: any) {
+        this.log('ERROR', 'ExecutionEngine', `Execution Failed for ${path}: ${err.message}`);
+        this.addBootLog(`ERROR: Binary Execution Fail: ${path}`);
+        this.addBootLog(`Reason: ${err.message}`);
+        this.terminateProcess(pid);
+      }
+    } catch (outerError: any) {
+      this.terminateProcess(pid);
+    }
   }
 
   terminateProcess(pid: number) {
@@ -796,6 +1035,27 @@ class Kernel {
     if (repaired) this._persistFileSystem();
   }
 
+  /**
+   * fsDeepReformat - Total System Wipe & Rebrand
+   * Used for major upgrades or fixing corrupted/old rebranding data.
+   */
+  fsDeepReformat() {
+    this.log('WARN', 'FileSystem', 'CRITICAL: Initiating Deep Reformat. All files will be reset.');
+    
+    // Clear the current virtual disk
+    this._filesystem.clear();
+    
+    // Populate with the perfect default nodes (ObsidianOS)
+    for (const [key, defaultNode] of Object.entries(defaultNodes)) {
+      this._filesystem.set(key, { ...defaultNode });
+    }
+    
+    // Persist and signal update
+    this._persistFileSystem();
+    this.emit('filesystem:snapshot', this.fsGetSnapshot());
+    this.log('INFO', 'FileSystem', 'Deep Reformat complete. Disk is now purely ObsidianOS.');
+  }
+
   fsGetSnapshot(): Record<string, FileSystemNode> {
     return Object.fromEntries(this._filesystem);
   }
@@ -872,15 +1132,19 @@ class Kernel {
     title: string; icon: string; appId: string;
     width?: number; height?: number; minWidth?: number; minHeight?: number;
     isResizable?: boolean; processId: number;
+    params?: any;
   }): string {
     const id = uuidv4();
     const sw = typeof window !== 'undefined' ? window.innerWidth : 1920;
     const sh = typeof window !== 'undefined' ? window.innerHeight - 48 : 1032;
     const w = config.width || 800;
     const h = config.height || 600;
+    
+    // Deactivate current active window
     for (const [wid, win] of this._windows.entries()) {
       if (win.isActive) this._windows.set(wid, { ...win, isActive: false });
     }
+
     const nw: WindowState = {
       id, title: config.title, icon: config.icon, appId: config.appId,
       x: Math.max(40, (sw - w) / 2 + Math.random() * 60 - 30),
@@ -892,6 +1156,7 @@ class Kernel {
       isResizable: config.isResizable !== false, isDraggable: true,
       isClosable: true, isMinimizable: true, isMaximizable: true,
       processId: config.processId,
+      params: config.params,
     };
     this._windows.set(id, nw);
     this._activeWindowId = id;
@@ -1028,6 +1293,8 @@ class Kernel {
 
   // ========== Reset ==========
   reset() {
+    this._isBooting = false;
+    this._isBootFinished = false;
     this._bootPhase = 'OFF';
     this._logs = [];
     this._drivers.clear();

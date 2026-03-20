@@ -44,7 +44,7 @@ export default function TaskManagerApp({}: { windowId: string }) {
 
   const handleRunTask = () => {
     if (!runTaskCmd) return;
-    // Simple command execution simulation
+    // Command execution logic
     const name = runTaskCmd.toLowerCase().trim();
     if (name === 'explorer.exe' || name === 'explorer') {
       useProcessManager.getState().createProcess('explorer.exe', 'Windows Explorer', '📁');
