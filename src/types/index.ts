@@ -145,7 +145,7 @@ export interface AppDefinition {
   id: string;
   name: string;
   icon: string;
-  component: React.ComponentType<{ windowId: string }>;
+  component?: React.ComponentType<{ windowId: string }>;
   defaultWidth: number;
   defaultHeight: number;
   minWidth: number;
@@ -153,4 +153,5 @@ export interface AppDefinition {
   isResizable: boolean;
   isSingleInstance: boolean;
   category: 'system' | 'productivity' | 'utilities' | 'entertainment';
+  binaryPath?: string; // For SDK apps — path to the .exe binary to execute
 }

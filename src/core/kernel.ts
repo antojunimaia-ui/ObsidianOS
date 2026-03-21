@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Process, WindowState, FileSystemNode, SystemTheme, UserProfile } from '../types';
 import { defaultNodes, makeFile, makeDir } from './defaultFileSystem';
 import { defaultRegistry, type RegistryEntry, type RegistryValue } from './defaultRegistry';
+import { opfsDriver, type OPFSDriver } from './opfsDriver';
 
 export type KernelLogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL' | 'FATAL';
 
@@ -104,6 +105,7 @@ class Kernel {
   private _isInitialized: boolean = false;
   private _isBooting: boolean = false;
   private _isBootFinished: boolean = false;
+  private _shellLoaded: boolean = false;
 
   // ── Process Table ──────────────────────────────────────────────────────────
   private _processes: Map<number, Process> = new Map();
@@ -116,6 +118,10 @@ class Kernel {
 
   // ── File System ────────────────────────────────────────────────────────────
   private _filesystem: Map<string, FileSystemNode> = new Map();
+  private _diskDriver: OPFSDriver | null = null;
+
+  // Exposed so driver binaries (ntfs.sys, volmgr.sys) can access it
+  readonly opfsDriver: OPFSDriver = opfsDriver;
 
   // ── Registry ───────────────────────────────────────────────────────────────
   private _registry: Record<string, Record<string, RegistryEntry>> = {};
@@ -158,7 +164,20 @@ class Kernel {
     this._isBooting = true;
     try {
       this.reset();
-      this.fsRepairSystemFiles(); // Ensure bootmgr.exe is up to date
+
+      // If OPFS is available, hydrate the filesystem from disk BEFORE anything else.
+      // This ensures deleted files stay deleted — the disk is the source of truth.
+      // Only fall back to fsRepairSystemFiles when OPFS is not available.
+      if (opfsDriver.isAvailable() && await opfsDriver.diskExists()) {
+        this.addBootLog('BIOS: Loading filesystem from disk...');
+        this._diskDriver = opfsDriver;
+        await this.hydrateFromDisk();
+      } else {
+        // No OPFS disk yet — use defaultNodes and repair system files
+        // (first boot, or browser without OPFS support)
+        this.fsRepairSystemFiles();
+      }
+
       this._isBootFinished = false; // Fresh start
       this.bootPhase = 'BIOS_POST';
       this.addBootLog('ObsidianOS BIOS v2.4.0');
@@ -169,6 +188,19 @@ class Kernel {
       
       let bootmgr = this.fsGetNode('C:\\ObsidianOS\\System32\\bootmgr.exe');
       if (!bootmgr) {
+        if (this._diskDriver) {
+          // OPFS is active — the file was genuinely deleted. No auto-repair.
+          this.addBootLog('BOOTMGR not found. Boot failure.');
+          this.triggerBSOD({
+            stopCode: 'BOOT_LOADER_FAILURE',
+            technicalInfo: 'bootmgr.exe is missing from C:\\ObsidianOS\\System32. The system cannot boot.',
+            failedComponent: 'bootmgr.exe',
+            bugCheckCode: '0x000000F4',
+            parameters: ['bootmgr.exe', 'C:\\ObsidianOS\\System32', '0x0', '0x0'],
+          });
+          return;
+        }
+        // No OPFS — safe to auto-repair from defaultNodes
         this.addBootLog('BOOTMGR not found. Starting Auto-Repair...');
         this.fsDeepReformat();
         bootmgr = this.fsGetNode('C:\\ObsidianOS\\System32\\bootmgr.exe');
@@ -178,6 +210,27 @@ class Kernel {
 
       this.addBootLog('Locating Bootloader... Found [C:\\ObsidianOS\\System32\\bootmgr.exe]');
       this.bootPhase = 'BOOTLOADER';
+
+      // Pre-flight: restore critical boot config files if missing
+      // (boot.ini, win.ini — these are system files but can be safely restored without wiping user data)
+      const criticalBootFiles = [
+        'C:\\ObsidianOS\\System32\\boot.ini',
+        'C:\\ObsidianOS\\System32\\win.ini',
+      ];
+      for (const filePath of criticalBootFiles) {
+        if (!this.fsGetNode(filePath)) {
+          const def = defaultNodes[filePath];
+          if (def) {
+            this._filesystem.set(filePath, { ...def });
+            if (this._diskDriver) {
+              await this._diskDriver.writeContent(filePath, def.content || '');
+              await this._diskDriver.writeMeta({ ...def });
+            }
+            this.addBootLog(`BIOS: Restored missing ${filePath.split('\\').pop()}`);
+          }
+        }
+      }
+
       this.addBootLog('Handing over control to Boot Manager...');
       
       const pid = this.createProcess('bootmgr.exe', 'Boot Manager', '⚙️');
@@ -205,6 +258,10 @@ class Kernel {
   }
 
   async loadShell(): Promise<boolean> {
+    // Guard against double execution (React StrictMode / concurrent calls)
+    if (this._shellLoaded) return true;
+    this._shellLoaded = true;
+
     const explorer = this.fsGetNode('C:\\ObsidianOS\\System32\\explorer.exe');
     if (!explorer) {
       this.triggerBSOD({
@@ -373,17 +430,16 @@ class Kernel {
   // NÃO emite eventos — a inicialização é silenciosa.
   private _initSystemProcesses() {
     type InitProc = Omit<Process, 'startTime'>;
+    // NOTE: 'System' (PID 0) is intentionally absent — it is created by bootmgr.exe
+    // during the boot sequence so it appears as a real boot-time process.
+    // explorer.exe, dwm.exe, SearchHost.exe are created by loadShell().
     const INITIAL: InitProc[] = [
-      { pid: 0, name: 'System',         title: 'System Process',                    icon: '⚙️', status: 'running', memoryUsage: 350.2, cpuUsage: 0.1 },
-      { pid: 1, name: 'smss.exe',       title: 'Session Manager Subsystem',         icon: '⚙️', status: 'running', memoryUsage: 12.1,  cpuUsage: 0 },
-      { pid: 2, name: 'csrss.exe',      title: 'Client Server Runtime Process',     icon: '⚙️', status: 'running', memoryUsage: 45.8,  cpuUsage: 0.2 },
-      { pid: 3, name: 'wininit.exe',    title: 'ObsidianOS Start-Up Application',   icon: '⚙️', status: 'running', memoryUsage: 18.5,  cpuUsage: 0 },
-      { pid: 4, name: 'services.exe',   title: 'Services and Controller App',       icon: '⚙️', status: 'running', memoryUsage: 82.2,  cpuUsage: 0.3 },
-      { pid: 5, name: 'lsass.exe',      title: 'Local Security Authority Process',  icon: '🔒', status: 'running', memoryUsage: 124.4, cpuUsage: 0.1 },
-      { pid: 6, name: 'svchost.exe',    title: 'Service Host: Local System',        icon: '⚙️', status: 'running', memoryUsage: 428.6, cpuUsage: 0.5 },
-      { pid: 7, name: 'dwm.exe',        title: 'Desktop Window Manager',            icon: '🖥️', status: 'running', memoryUsage: 162.3, cpuUsage: 1.2 },
-      { pid: 8, name: 'explorer.exe',   title: 'ObsidianOS Explorer',               icon: '📁', status: 'running', memoryUsage: 285.7, cpuUsage: 0.8 },
-      { pid: 9, name: 'SearchHost.exe', title: 'Search Host',                       icon: '🔍', status: 'running', memoryUsage: 145.2, cpuUsage: 0.3 },
+      { pid: 1, name: 'smss.exe',    title: 'Session Manager Subsystem',        icon: '⚙️', status: 'running', memoryUsage: 12.1,  cpuUsage: 0 },
+      { pid: 2, name: 'csrss.exe',   title: 'Client Server Runtime Process',    icon: '⚙️', status: 'running', memoryUsage: 45.8,  cpuUsage: 0.2 },
+      { pid: 3, name: 'wininit.exe', title: 'ObsidianOS Start-Up Application',  icon: '⚙️', status: 'running', memoryUsage: 18.5,  cpuUsage: 0 },
+      { pid: 4, name: 'services.exe',title: 'Services and Controller App',      icon: '⚙️', status: 'running', memoryUsage: 82.2,  cpuUsage: 0.3 },
+      { pid: 5, name: 'lsass.exe',   title: 'Local Security Authority Process', icon: '🔒', status: 'running', memoryUsage: 124.4, cpuUsage: 0.1 },
+      { pid: 6, name: 'svchost.exe', title: 'Service Host: Local System',       icon: '⚙️', status: 'running', memoryUsage: 428.6, cpuUsage: 0.5 },
     ];
     const startTime = Date.now();
     let totalRam = 0;
@@ -692,6 +748,7 @@ class Kernel {
     try {
       const system32 = fs.getChildren('C:\\ObsidianOS\\System32');
       const progFiles = fs.getChildren('C:\\Program Files\\ObsidianOS Apps');
+      const sdkExamples = fs.getChildren('C:\\ObsidianOS\\SDK\\examples');
       const executables = [...system32, ...progFiles].filter((node: any) => node.extension === 'exe');
       
       this.log('INFO', 'Discovery', `Found ${executables.length} potential executables.`);
@@ -723,12 +780,162 @@ class Kernel {
           this.log('WARN', 'Discovery', `Skipped ${node.name}: Not a valid manifest. (${e})`);
         }
       }
+
+      // Register SDK example .exe files as runnable SDK apps
+      const sdkExes = sdkExamples.filter((node: any) => node.extension === 'exe');
+      this.log('INFO', 'Discovery', `Found ${sdkExes.length} SDK example(s).`);
+      for (const node of sdkExes) {
+        const appId = `sdk:${node.name}`;
+        this.log('DEBUG', 'Discovery', `Registering SDK app: ${node.name} (${appId})`);
+        registry.registerApp({
+          id: appId,
+          name: node.name,
+          icon: '⚡',
+          category: 'utilities',
+          defaultWidth: 600,
+          defaultHeight: 400,
+          minWidth: 300,
+          minHeight: 200,
+          isResizable: true,
+          isSingleInstance: false,
+          binaryPath: node.path,
+        });
+      }
       
       registry.setReady(true);
       this.log('INFO', 'Discovery', 'App discovery complete.');
     } catch (e) {
       this.log('ERROR', 'Discovery', `Discovery failed: ${e}`);
     }
+  }
+
+  // ========== OPFS / Disk Driver ==========
+
+  // Called by volmgr.sys/ntfs.sys binaries to register the real disk driver
+  async registerFsDriver(driver: OPFSDriver): Promise<void> {
+    this._diskDriver = driver;
+    this.log('INFO', 'Kernel', 'Filesystem driver registered (OPFS)');
+  }
+
+  // Called by ntfs.sys after volmgr mounts the disk
+  async hydrateFromDisk(): Promise<number> {
+    if (!this._diskDriver) return 0;
+    try {
+      const nodes = await this._diskDriver.hydrateCache();
+      this._filesystem = new Map(Object.entries(nodes));
+      this.log('INFO', 'Kernel', `Hydrated ${this._filesystem.size} nodes from OPFS`);
+      this.emit('fs:snapshot', Object.fromEntries(this._filesystem));
+      return this._filesystem.size;
+    } catch (e) {
+      this.log('ERROR', 'Kernel', `Hydration failed: ${e}`);
+      return 0;
+    }
+  }
+
+  // Returns the default node map — used by volmgr.sys on first format
+  getDefaultNodes(): Record<string, FileSystemNode> {
+    return { ...defaultNodes };
+  }
+
+  // Helpers exposed to driver binaries
+  getFsNodeCount(): number { return this._filesystem.size; }
+  isDiskDriverActive(): boolean { return this._diskDriver !== null; }
+
+  // Startup Repair — restores missing/corrupted system files.
+  // Prefers VSS snapshot (C:\System Volume Information\VSS\snapshot.json) over hardcoded defaults.
+  async fsStartupRepair(): Promise<{ fixed: number; files: string[] }> {
+    this.log('WARN', 'StartupRepair', 'Startup Repair initiated.');
+    const fixed: string[] = [];
+
+    // Try to load VSS snapshot first
+    let vssSnapshot: Record<string, string> | null = null;
+    const snapshotPath = 'C:\\System Volume Information\\VSS\\snapshot.json';
+    const snapshotNode = this._filesystem.get(snapshotPath);
+    if (snapshotNode?.content) {
+      try {
+        const parsed = JSON.parse(snapshotNode.content);
+        if (parsed?.files && typeof parsed.files === 'object') {
+          vssSnapshot = parsed.files;
+          this.log('INFO', 'StartupRepair', `VSS snapshot loaded (${Object.keys(vssSnapshot!).length} files, ts=${parsed.timestamp})`);
+        }
+      } catch {
+        this.log('WARN', 'StartupRepair', 'VSS snapshot parse failed — falling back to defaults');
+      }
+    } else {
+      this.log('WARN', 'StartupRepair', 'No VSS snapshot found — using hardcoded defaults');
+    }
+
+    for (const [key, defaultNode] of Object.entries(defaultNodes)) {
+      if (!defaultNode.attributes.isSystem) continue;
+      const current = this._filesystem.get(key);
+      const isMissing = !current;
+      const isCorrupted = current && defaultNode.type === 'file' &&
+        defaultNode.content && current.content !== defaultNode.content &&
+        defaultNode.attributes.isSystem;
+
+      if (isMissing || isCorrupted) {
+        const restored = { ...defaultNode };
+
+        // Use VSS snapshot content if available for this file
+        if (vssSnapshot && defaultNode.type === 'file' && vssSnapshot[key] !== undefined) {
+          restored.content = vssSnapshot[key];
+          restored.size = vssSnapshot[key].length;
+        }
+
+        this._filesystem.set(key, restored);
+        if (this._diskDriver) {
+          if (defaultNode.type === 'directory') {
+            await this._diskDriver.createDirectory(key);
+          } else {
+            await this._diskDriver.writeContent(key, restored.content || '');
+          }
+          await this._diskDriver.writeMeta(restored);
+        }
+        fixed.push(key);
+        this.log('INFO', 'StartupRepair', `Restored: ${key}${vssSnapshot ? ' (VSS)' : ' (default)'}`);
+      }
+    }
+
+    this.log('INFO', 'StartupRepair', `Repair complete. ${fixed.length} file(s) restored.`);
+    return { fixed: fixed.length, files: fixed };
+  }
+
+  // Async driver loader — executes a .sys binary and awaits its completion
+  // Used by bootmgr.exe for volmgr.sys and ntfs.sys
+  async loadDriverAsync(path: string): Promise<boolean> {
+    const node = this.fsGetNode(path);
+    if (!node || !node.content) {
+      this.log('ERROR', 'Kernel', `loadDriverAsync: ${path} not found`);
+      return false;
+    }
+    return new Promise<boolean>((resolve) => {
+      const pid = this.createProcess(node.name, node.name, '⚙️');
+      let settled = false;
+
+      const offTerminated = this.on('process:terminated', (terminatedPid: number) => {
+        if (terminatedPid === pid && !settled) {
+          settled = true;
+          offTerminated();
+          resolve(true);
+        }
+      });
+
+      // Execute — the binary calls OS.terminate(0) when done
+      this.executeBinary(pid, path).catch((e) => {
+        this.log('ERROR', 'Kernel', `loadDriverAsync execution error: ${e}`);
+        if (!settled) { settled = true; offTerminated(); resolve(false); }
+      });
+
+      // Safety timeout — 10s
+      setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          offTerminated();
+          this.log('WARN', 'Kernel', `loadDriverAsync timeout: ${path}`);
+          resolve(false);
+        }
+      }, 10000);
+    });
   }
 
   // ========== Process Management ==========
@@ -810,8 +1017,31 @@ class Kernel {
       getDriver: (n: string) => this._drivers.get(n),
       getService: (n: string) => this._services.get(n),
       getAllServices: () => Array.from(this._services.values()),
-      scanSystemApps: (fs: any, reg: any) => this.scanSystemApps(fs, reg)
-    };
+      scanSystemApps: (fs: any, reg: any) => this.scanSystemApps(fs, reg),
+
+      // --- LIBRARY LOADER ---
+      loadLibrary: (dllPath: string): boolean => {
+        const dllNode = this.fsGetNode(dllPath);
+        if (!dllNode || !dllNode.content) {
+          this.log('ERROR', 'ExecutionEngine', `LoadLibrary failed: ${dllPath} not found`);
+          return false;
+        }
+        try {
+          const dllFn = new Function('OS', 'kernel', `"use strict";\n${dllNode.content}`);
+          dllFn(OS, this);
+          this.log('INFO', 'ExecutionEngine', `Loaded library: ${dllPath}`);
+          return true;
+        } catch (e: any) {
+          this.log('ERROR', 'ExecutionEngine', `LoadLibrary error in ${dllPath}: ${e.message}`);
+          return false;
+        }
+      },
+
+      // --- DRIVER LOADER (async) ---
+      loadDriverAsync: (driverPath: string): Promise<boolean> => {
+        return this.loadDriverAsync(driverPath);
+      },
+    } as Record<string, any>;
 
     try {
       // Auto-Linker: Prepends the SDK library if it exists
@@ -847,37 +1077,60 @@ class Kernel {
     }
   }
 
+  // Processes that must never be terminated — killing them triggers BSOD
+  private static readonly CRITICAL_PROCESSES: Record<string, { stopCode: string; component: string; technical: string; bugCheck: string }> = {
+    'System':       { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'ntoskrnl.exe', technical: 'The System kernel process was terminated.',                                          bugCheck: '0x000000EF' },
+    'smss.exe':     { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'smss.exe',     technical: 'Session Manager Subsystem process died.',                                            bugCheck: '0x000000EF' },
+    'csrss.exe':    { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'csrss.exe',    technical: 'Client Server Runtime Process died.',                                                bugCheck: '0x000000EF' },
+    'wininit.exe':  { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'wininit.exe',  technical: 'Windows Start-Up Application stopped.',                                             bugCheck: '0x000000EF' },
+    'lsass.exe':    { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'lsass.exe',    technical: 'Local Security Authority Process encountered a critical error.',                    bugCheck: '0x000000EF' },
+    'services.exe': { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'services.exe', technical: 'Services and Controller App stopped.',                                              bugCheck: '0x000000EF' },
+    'dwm.exe':      { stopCode: 'DESKTOP_WINDOW_MANAGER_DIED', component: 'dwm.exe',      technical: 'Desktop Window Manager (DWM) encountered a fatal error and could not be restarted.', bugCheck: '0x000000EF' },
+  };
+
   terminateProcess(pid: number) {
     const proc = this._processes.get(pid);
     if (!proc) return;
     this.freeMemory(proc.memoryUsage);
     this._processes.delete(pid);
     
-    // Close associated windows without creating an infinite loop
-    let windowsRemoved = false;
+    // Close associated windows
     for (const win of Array.from(this._windows.values())) {
       if (win.processId === pid) {
         this._windows.delete(win.id);
-        windowsRemoved = true;
       }
     }
-    
-    // Re-evaluate active window if we killed one
-    if (windowsRemoved) {
-      const remaining = Array.from(this._windows.values()).filter(w => !w.isMinimized);
-      remaining.sort((a, b) => b.zIndex - a.zIndex);
-      if (remaining.length > 0) {
-        const top = remaining[0];
-        top.isActive = true;
-        this._activeWindowId = top.id;
-      } else {
-        this._activeWindowId = null;
-      }
-      this._emitWindowSnapshot();
+
+    // Re-evaluate active window
+    const remaining = Array.from(this._windows.values()).filter(w => !w.isMinimized);
+    remaining.sort((a, b) => b.zIndex - a.zIndex);
+    if (remaining.length > 0) {
+      const top = remaining[0];
+      this._windows.set(top.id, { ...top, isActive: true });
+      this._activeWindowId = top.id;
+    } else {
+      this._activeWindowId = null;
     }
+
+    // Always emit snapshot so window store stays in sync
+    this._emitWindowSnapshot();
 
     this.log('DEBUG', 'ProcessManager', `Terminated: ${proc.name} [PID:${pid}]`);
     this.emit('process:terminated', pid);
+
+    // Trigger BSOD if a critical process was killed (only when desktop is running)
+    if (this._isInitialized && this._bootPhase !== 'BSOD') {
+      const critical = Kernel.CRITICAL_PROCESSES[proc.name];
+      if (critical) {
+        setTimeout(() => this.triggerBSOD({
+          stopCode: critical.stopCode,
+          technicalInfo: critical.technical,
+          failedComponent: critical.component,
+          bugCheckCode: critical.bugCheck,
+          parameters: ['0x00000000', '0x00000000', '0x00000000', '0x00000000'],
+        }), 100);
+      }
+    }
   }
 
   suspendProcess(pid: number) {
@@ -931,6 +1184,12 @@ class Kernel {
   // ========== File System Management ==========
 
   private _persistFileSystem() {
+    // When OPFS driver is active, writes go directly to disk (write-through above).
+    // localStorage is only used as fallback when OPFS is not available.
+    if (this._diskDriver) {
+      this.emit('fs:snapshot', Object.fromEntries(this._filesystem));
+      return;
+    }
     if (typeof window === 'undefined') return;
     const obj = Object.fromEntries(this._filesystem);
     localStorage.setItem('obsidianos-filesystem-v2', JSON.stringify(obj));
@@ -941,6 +1200,21 @@ class Kernel {
     return this._filesystem.get(path);
   }
 
+  // Async version — loads content from OPFS if not in cache
+  async fsGetNodeAsync(path: string): Promise<FileSystemNode | undefined> {
+    const cached = this._filesystem.get(path);
+    if (!cached) return undefined;
+    // If content is missing and we have a disk driver, load it
+    if (cached.type === 'file' && cached.content === undefined && this._diskDriver) {
+      const content = await this._diskDriver.readContent(path);
+      if (content !== null) {
+        cached.content = content;
+        this._filesystem.set(path, cached);
+      }
+    }
+    return cached;
+  }
+
   fsGetChildren(path: string): FileSystemNode[] {
     return Array.from(this._filesystem.values()).filter(n => n.parentPath === path);
   }
@@ -949,6 +1223,10 @@ class Kernel {
     const path = `${parentPath}\\${name}`;
     const node = makeFile(path, name, parentPath, extension, content);
     this._filesystem.set(path, node);
+    // Write-through to OPFS
+    if (this._diskDriver) {
+      this._diskDriver.writeContent(path, content).then(() => this._diskDriver!.writeMeta(node));
+    }
     this._persistFileSystem();
   }
 
@@ -956,6 +1234,9 @@ class Kernel {
     const path = `${parentPath}\\${name}`;
     const node = makeDir(path, name, parentPath);
     this._filesystem.set(path, node);
+    if (this._diskDriver) {
+      this._diskDriver.createDirectory(path).then(() => this._diskDriver!.writeMeta(node));
+    }
     this._persistFileSystem();
   }
 
@@ -964,6 +1245,9 @@ class Kernel {
       if (key === path || key.startsWith(path + '\\')) {
         this._filesystem.delete(key);
       }
+    }
+    if (this._diskDriver) {
+      this._diskDriver.deleteNode(path);
     }
     this._persistFileSystem();
   }
@@ -993,6 +1277,9 @@ class Kernel {
         this._filesystem.delete(key);
       }
     }
+    if (this._diskDriver) {
+      this._diskDriver.renameNode(path, newName);
+    }
     this._persistFileSystem();
   }
 
@@ -1008,6 +1295,12 @@ class Kernel {
     
     this._filesystem.set(newPath, node);
     this._filesystem.delete(fromPath);
+    if (this._diskDriver) {
+      this._diskDriver.deleteNode(fromPath).then(() => {
+        this._diskDriver!.writeContent(newPath, node.content || '');
+        this._diskDriver!.writeMeta(node);
+      });
+    }
     this._persistFileSystem();
   }
 
@@ -1020,6 +1313,9 @@ class Kernel {
     node.modifiedAt = Date.now();
     
     this._filesystem.set(path, node);
+    if (this._diskDriver) {
+      this._diskDriver.writeContent(path, content).then(() => this._diskDriver!.writeMeta(node));
+    }
     this._persistFileSystem();
   }
 
@@ -1029,31 +1325,31 @@ class Kernel {
       const currentNode = this._filesystem.get(key);
       if (!currentNode || (defaultNode.attributes.isSystem && defaultNode.content !== currentNode.content)) {
         this._filesystem.set(key, { ...defaultNode });
+        if (this._diskDriver) {
+          this._diskDriver.writeMeta({ ...defaultNode });
+          if (defaultNode.type === 'file') this._diskDriver.writeContent(key, defaultNode.content || '');
+        }
         repaired = true;
       }
     }
     if (repaired) this._persistFileSystem();
   }
 
-  /**
-   * fsDeepReformat - Total System Wipe & Rebrand
-   * Used for major upgrades or fixing corrupted/old rebranding data.
-   */
   fsDeepReformat() {
     this.log('WARN', 'FileSystem', 'CRITICAL: Initiating Deep Reformat. All files will be reset.');
-    
-    // Clear the current virtual disk
     this._filesystem.clear();
-    
-    // Populate with the perfect default nodes (ObsidianOS)
     for (const [key, defaultNode] of Object.entries(defaultNodes)) {
       this._filesystem.set(key, { ...defaultNode });
     }
-    
-    // Persist and signal update
+    // Re-format OPFS disk too
+    if (this._diskDriver) {
+      this._diskDriver.formatDisk({ ...defaultNodes }).then(() => {
+        this.log('INFO', 'FileSystem', 'OPFS disk reformatted.');
+      });
+    }
     this._persistFileSystem();
     this.emit('filesystem:snapshot', this.fsGetSnapshot());
-    this.log('INFO', 'FileSystem', 'Deep Reformat complete. Disk is now purely ObsidianOS.');
+    this.log('INFO', 'FileSystem', 'Deep Reformat complete.');
   }
 
   fsGetSnapshot(): Record<string, FileSystemNode> {
@@ -1160,6 +1456,14 @@ class Kernel {
     };
     this._windows.set(id, nw);
     this._activeWindowId = id;
+
+    // Link the process to this window
+    const proc = this._processes.get(config.processId);
+    if (proc) {
+      this._processes.set(config.processId, { ...proc, windowId: id });
+      this.emit('process:updated', { ...proc, windowId: id });
+    }
+
     this._emitWindowSnapshot();
     return id;
   }
@@ -1167,18 +1471,15 @@ class Kernel {
   closeWindow(id: string) {
     const win = this._windows.get(id);
     if (!win) return;
+    // terminateProcess handles window removal + snapshot emission
     if (win.processId) {
       this.terminateProcess(win.processId);
     } else {
       this._windows.delete(id);
       const top = Array.from(this._windows.values())
         .filter(w => !w.isMinimized).sort((a, b) => b.zIndex - a.zIndex)[0];
-      if (top) {
-        this._windows.set(top.id, { ...top, isActive: true });
-        this._activeWindowId = top.id;
-      } else {
-        this._activeWindowId = null;
-      }
+      this._activeWindowId = top ? top.id : null;
+      if (top) this._windows.set(top.id, { ...top, isActive: true });
       this._emitWindowSnapshot();
     }
   }
@@ -1305,6 +1606,8 @@ class Kernel {
     this._resources.cpuUsage = 0;
     this._resources.uptime = 0;
     this._isInitialized = false;
+    this._shellLoaded = false;
+    this._diskDriver = null;
     // Reset lists
     this._processes.clear();
     this._windows.clear();

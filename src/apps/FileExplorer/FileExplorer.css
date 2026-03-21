@@ -55,3 +55,14 @@
 .explorer-view-toggle button { width: 24px; height: 24px; border: none; background: none; color: var(--text-tertiary); cursor: pointer; border-radius: 3px; font-size: 14px; }
 .explorer-view-toggle button:hover { background: var(--bg-hover); }
 .explorer-view-toggle button.active { background: var(--accent-subtle); color: var(--text-accent); }
+
+/* Rubber band selection box */
+.explorer-content { position: relative; }
+.explorer-selection-box {
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid rgba(99, 102, 241, 0.8);
+  background: rgba(99, 102, 241, 0.15);
+  border-radius: 2px;
+  z-index: 100;
+}

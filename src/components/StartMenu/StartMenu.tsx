@@ -66,6 +66,7 @@ export default function StartMenu() {
       minHeight: app.minHeight,
       isResizable: app.isResizable,
       processId: pid,
+      params: app.binaryPath ? { binaryPath: app.binaryPath } : undefined,
     });
     closeStartMenu();
   };

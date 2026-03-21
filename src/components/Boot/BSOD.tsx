@@ -12,66 +12,48 @@ interface BSODProps {
 
 export default function BSOD({ info }: BSODProps) {
   const [progress, setProgress] = useState(0);
+  const [dumpDone, setDumpDone] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
     let dumped = 0;
-    
-    // The amount of memory to "dump" based on real kernel usage (MB)
-    // We limit max dump size artificially to avoid blocking the browser forever,
-    // but the progress will represent the real kernel memory proportion
     const totalMemoryMB = Math.max(1, kernel.resources.usedMemory);
-    
-    // Chunk size (MB per step)
-    const chunkMB = Math.max(0.5, totalMemoryMB / 50); // Will take ~50 steps or fewer
-
+    const chunkMB = Math.max(0.5, totalMemoryMB / 50);
     const fs = useFileSystem.getState();
 
-    // Prepare dump directory
     const dumpDir = 'C:\\ObsidianOS\\System32\\Minidump';
-    if (!fs.exists(dumpDir)) {
-      fs.createDirectory('C:\\ObsidianOS\\System32', 'Minidump');
-    }
+    if (!fs.exists(dumpDir)) fs.createDirectory('C:\\ObsidianOS\\System32', 'Minidump');
 
-    // Create dump file
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const dumpFile = `MEMORY_${timestamp}.DMP`;
     let dumpContent = `=== ObsidianOS Kernel Dump ===\nSTOP_CODE: ${info.stopCode}\nFAILED_COMPONENT: ${info.failedComponent}\n\n`;
 
     const iterateDump = () => {
       if (!isMounted) return;
-
       dumped += chunkMB;
-      
-      // Accumulate some "binary" garbage to the dump file
-      // Emulating a real memory dump writing process
-      const hexLine = Array.from({ length: 8 }, () => Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')).join(' ');
+      const hexLine = Array.from({ length: 8 }, () =>
+        Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')
+      ).join(' ');
       dumpContent += `${Math.floor(dumped * 1024).toString(16).padStart(8, '0')}  ${hexLine}\n`;
 
       if (dumped >= totalMemoryMB) {
-        dumped = totalMemoryMB;
         setProgress(100);
-        
-        // Finalize the file save to the real virtual filesystem
         fs.createFile(dumpDir, dumpFile, dumpContent, 'DMP');
-        
-        setTimeout(() => {
-          localStorage.setItem('obsidianos_crashed', '1');
-          if (isMounted) window.location.reload();
-        }, 3000);
+        // Increment crash counter
+        const prev = parseInt(localStorage.getItem('obsidianos_crash_count') ?? '0', 10);
+        localStorage.setItem('obsidianos_crash_count', String(prev + 1));
+        if (isMounted) {
+          setDumpDone(true);
+          setTimeout(() => window.location.reload(), 3000);
+        }
       } else {
         setProgress(Math.floor((dumped / totalMemoryMB) * 100));
-        // Continue dumping next frame/timeout to not block UI thread
-        setTimeout(iterateDump, 50); // Faster/Slower dump depending on chunk
+        setTimeout(iterateDump, 50);
       }
     };
 
-    // Start dumping
     setTimeout(iterateDump, 500);
-
-    return () => {
-      isMounted = false;
-    };
+    return () => { isMounted = false; };
   }, [info]);
 
   return (
@@ -83,7 +65,9 @@ export default function BSOD({ info }: BSODProps) {
           Estamos coletando algumas informações sobre o erro e, em seguida, reiniciaremos para você.
         </p>
         <p className="bsod-progress">{progress}% concluído</p>
-        
+
+
+
         <div className="bsod-details-box">
           <div className="bsod-qr">
             <svg viewBox="0 0 100 100" fill="white">
@@ -100,7 +84,7 @@ export default function BSOD({ info }: BSODProps) {
             <p className="bsod-failed">O que falhou: {info.failedComponent || 'Unknown System Component'}</p>
           </div>
         </div>
-        
+
         <div className="bsod-tech-inner">
           <p>*** TECHNICAL INFORMATION ***</p>
           <p>BUG CHECK CODE: {info.bugCheckCode || '0x00000000'}</p>

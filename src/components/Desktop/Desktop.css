@@ -77,3 +77,13 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* Rubber band selection box */
+.desktop-selection-box {
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid rgba(99, 102, 241, 0.8);
+  background: rgba(99, 102, 241, 0.15);
+  border-radius: 2px;
+  z-index: 9999;
+}

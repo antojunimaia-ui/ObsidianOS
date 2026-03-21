@@ -29,6 +29,15 @@ export function makeFile(path: string, name: string, parentPath: string, ext: st
   };
 }
 
+export function makeSysFile(path: string, name: string, parentPath: string, ext: string, content = ''): FileSystemNode {
+  return {
+    id: path, name, type: 'file', path, parentPath, size: content.length,
+    extension: ext, content,
+    createdAt: now, modifiedAt: now, accessedAt: now,
+    permissions: sysPermissions, attributes: sysAttributes,
+  };
+}
+
 function makeSysExe(path: string, name: string, parentPath: string, description: string, version = '10.0.26100.1'): FileSystemNode {
   return {
     id: path, name, type: 'file', path, parentPath,
@@ -115,6 +124,8 @@ const dirs = [
   ['C:\\Users\\Public', 'Public', 'C:\\Users', false],
   ['C:\\ProgramData', 'ProgramData', 'C:', false],
   ['C:\\Recovery', 'Recovery', 'C:', true],
+  ['C:\\System Volume Information', 'System Volume Information', 'C:', true],
+  ['C:\\System Volume Information\\VSS', 'VSS', 'C:\\System Volume Information', true],
 ] as const;
 
 dirs.forEach(([path, name, parent, sys]) => {
@@ -126,9 +137,8 @@ dirs.forEach(([path, name, parent, sys]) => {
 // Deleting any of these will cause boot failure / BSOD
 // =====================================================
 const systemExes: [string, string, string, string][] = [
-  // Kernel & core
+  // Kernel & core — hal.dll is a real JS module (see dllModules below)
   ['C:\\ObsidianOS\\System32\\ntoskrnl.exe', 'ntoskrnl.exe', 'C:\\ObsidianOS\\System32', 'ObsidianOS NT Kernel'],
-  ['C:\\ObsidianOS\\System32\\hal.dll', 'hal.dll', 'C:\\ObsidianOS\\System32', 'Hardware Abstraction Layer'],
   ['C:\\ObsidianOS\\System32\\csrss.exe', 'csrss.exe', 'C:\\ObsidianOS\\System32', 'Client/Server Runtime Subsystem'],
   ['C:\\ObsidianOS\\System32\\smss.exe', 'smss.exe', 'C:\\ObsidianOS\\System32', 'Session Manager Subsystem'],
   ['C:\\ObsidianOS\\System32\\winlogon.exe', 'winlogon.exe', 'C:\\ObsidianOS\\System32', 'Windows Logon Application'],
@@ -147,8 +157,7 @@ const systemExes: [string, string, string, string][] = [
   ['C:\\ObsidianOS\\System32\\sihost.exe', 'sihost.exe', 'C:\\ObsidianOS\\System32', 'Shell Infrastructure Host'],
   ['C:\\ObsidianOS\\System32\\taskhostw.exe', 'taskhostw.exe', 'C:\\ObsidianOS\\System32', 'Task Host Window'],
   ['C:\\ObsidianOS\\System32\\ctfmon.exe', 'ctfmon.exe', 'C:\\ObsidianOS\\System32', 'CTF Loader'],
-  // DLLs
-  ['C:\\ObsidianOS\\System32\\kernel32.dll', 'kernel32.dll', 'C:\\ObsidianOS\\System32', 'ObsidianOS BASE API Client DLL'],
+  // DLLs — hal.dll and kernel32.dll are real JS modules (see dllModules below)
   ['C:\\ObsidianOS\\System32\\user32.dll', 'user32.dll', 'C:\\ObsidianOS\\System32', 'Multi-User ObsidianOS USER API Client DLL'],
   ['C:\\ObsidianOS\\System32\\gdi32.dll', 'gdi32.dll', 'C:\\ObsidianOS\\System32', 'GDI Client DLL'],
   ['C:\\ObsidianOS\\System32\\ntdll.dll', 'ntdll.dll', 'C:\\ObsidianOS\\System32', 'NT Layer DLL'],
@@ -212,8 +221,6 @@ const binaryExes: [string, string, string, string][] = [
 // ============================================
 // OBSIDIAN OS NATIVE BOOT MANAGER (BOOTMGR)
 // ============================================
-// Performs the actual OS load from files.
-
 OS.addBootLog('BootMgr: Initializing boot flow...');
 
 // 1. Read boot.ini
@@ -224,7 +231,7 @@ if (!bootConfig) {
   return;
 }
 
-// 2. Parse Logic
+// 2. Parse ARC path
 const timeoutMatch = bootConfig.match(/timeout=(\\d+)/i);
 const timeout = timeoutMatch ? parseInt(timeoutMatch[1], 10) : 3;
 const defaultArcMatch = bootConfig.match(/default=(.*)/i);
@@ -236,41 +243,197 @@ if (!arcPath.includes('partition(1)')) {
   return;
 }
 
-// 3. Find System Folder (Fuzzy check)
-const sysRootMatch = arcPath.match(/partition\(1\)\\\\(.*)/i);
+// 3. Find System Folder
+const sysRootMatch = arcPath.match(/partition[(]1[)]\\\\(.*)/i);
 const sysRoot = (sysRootMatch && sysRootMatch[1]) ? sysRootMatch[1].trim() : 'ObsidianOS';
-
-// List files on C: (the root)
 const files = OS.listFiles('C:');
 const actualRoot = files.find(f => f.toLowerCase() === sysRoot.toLowerCase());
-
 if (!actualRoot) {
-  OS.triggerBSOD({ stopCode: 'BOOT_LOADER_FAILURE', technicalInfo: 'System folder not found: ' + sysRoot + ' on C:' });
+  OS.triggerBSOD({ stopCode: 'BOOT_LOADER_FAILURE', technicalInfo: 'System folder not found: ' + sysRoot });
   return;
 }
 OS.addBootLog('BootMgr: System Root -> C:\\\\' + actualRoot + ' [OK]');
 
-// 4. Load Kernel
+// 4. Load Kernel (ntoskrnl.exe)
 OS.setBootPhase('KERNEL_INIT');
 OS.addBootLog('BootMgr: Loading ntoskrnl.exe...');
 const kernelCode = OS.readFile('C:\\\\' + actualRoot + '\\\\System32\\\\ntoskrnl.exe');
-if(!kernelCode) { OS.triggerBSOD({ stopCode: 'KERNEL_DATA_INPAGE_ERROR', technicalInfo: 'ntoskrnl.exe missing' }); return; }
+if (!kernelCode) { OS.triggerBSOD({ stopCode: 'KERNEL_DATA_INPAGE_ERROR', technicalInfo: 'ntoskrnl.exe missing' }); return; }
 OS.allocateMemory(64, 'ntoskrnl.exe');
 OS.createProcess('System', 'System Process', '⚙️');
 
-// 5. Load Drivers
+// 5. Load kernel32.dll — Base API
+OS.addBootLog('BootMgr: Loading kernel32.dll...');
+const k32ok = OS.loadLibrary('C:\\\\ObsidianOS\\\\System32\\\\kernel32.dll');
+if (!k32ok) { OS.triggerBSOD({ stopCode: 'KERNEL32_INIT_FAILED', technicalInfo: 'kernel32.dll failed to load', failedComponent: 'kernel32.dll', bugCheckCode: '0x0000007B', parameters: ['kernel32.dll'] }); return; }
+OS.allocateMemory(12, 'kernel32.dll');
+OS.addBootLog('  ✓ kernel32.dll');
+
+// 6. Load HAL
+OS.setBootPhase('HAL_INIT');
+OS.addBootLog('BootMgr: Loading hal.dll...');
+const halOk = OS.loadLibrary('C:\\\\ObsidianOS\\\\System32\\\\hal.dll');
+if (!halOk) { OS.triggerBSOD({ stopCode: 'HAL_INITIALIZATION_FAILED', technicalInfo: 'hal.dll failed to initialize', failedComponent: 'hal.dll', bugCheckCode: '0x0000005C', parameters: ['hal.dll'] }); return; }
+OS.allocateMemory(8, 'hal.dll');
+OS.addBootLog('  ✓ hal.dll');
+
+// 7. Load Drivers
 OS.setBootPhase('DRIVER_LOAD');
-const drivers = ['ntfs.sys', 'disk.sys', 'display.sys', 'hid.sys', 'netio.sys'];
 OS.addBootLog('BootMgr: Loading drivers...');
-for(const d of drivers) {
-   OS.registerDriver({ name: d, status: 'loaded', type: 'kernel' });
-   OS.addBootLog('  ✓ ' + d);
+
+// volmgr.sys — mounts the virtual disk (OPFS)
+OS.addBootLog('  Loading volmgr.sys...');
+const volmgrOk = await OS.loadDriverAsync('C:\\\\ObsidianOS\\\\System32\\\\drivers\\\\volmgr.sys');
+if (!volmgrOk) { OS.triggerBSOD({ stopCode: 'VOLMGR_FAILED', technicalInfo: 'Volume Manager failed to initialize. Disk cannot be mounted.', failedComponent: 'volmgr.sys', bugCheckCode: '0x0000006B', parameters: ['volmgr.sys'] }); return; }
+OS.addBootLog('  ✓ volmgr.sys');
+
+// ntfs.sys — registers the filesystem driver
+OS.addBootLog('  Loading ntfs.sys...');
+const ntfsOk = await OS.loadDriverAsync('C:\\\\ObsidianOS\\\\System32\\\\drivers\\\\ntfs.sys');
+if (!ntfsOk) { OS.triggerBSOD({ stopCode: 'NTFS_FILE_SYSTEM', technicalInfo: 'NTFS driver failed to initialize.', failedComponent: 'ntfs.sys', bugCheckCode: '0x00000024', parameters: ['ntfs.sys'] }); return; }
+OS.addBootLog('  ✓ ntfs.sys');
+
+// vss.sys — Volume Shadow Copy (non-critical, best-effort)
+OS.addBootLog('  Loading vss.sys...');
+const vssOk = await OS.loadDriverAsync('C:\\\\ObsidianOS\\\\System32\\\\drivers\\\\vss.sys');
+if (vssOk) { OS.addBootLog('  ✓ vss.sys'); } else { OS.addBootLog('  ! vss.sys failed (non-critical)'); }
+
+// Remaining passive drivers
+const passiveDrivers = ['disk.sys', 'display.sys', 'hid.sys', 'netio.sys'];
+for (const d of passiveDrivers) {
+  OS.registerDriver({ name: d, status: 'loaded', type: 'kernel' });
+  OS.addBootLog('  ✓ ' + d);
 }
 
-// 6. Finishing
+// 8. Finalize
 OS.setBootPhase('SERVICE_INIT');
 OS.addBootLog('BootMgr: Enabling user session...');
 OS.finalizeBoot();
+OS.terminate(0);
+    `.trim()
+  ],
+  [
+    'C:\\ObsidianOS\\System32\\drivers\\volmgr.sys',
+    'volmgr.sys',
+    'C:\\ObsidianOS\\System32\\drivers',
+    `
+// ============================================
+// volmgr.sys — Volume Manager Driver
+// Mounts the virtual disk using OPFS.
+// Runs during DRIVER_LOAD phase.
+// ============================================
+OS.addBootLog('volmgr: Initializing Volume Manager...');
+
+const available = await kernel.opfsDriver.isAvailable();
+if (!available) {
+  OS.error('volmgr: OPFS not available in this browser.');
+  OS.terminate(1);
+  return;
+}
+
+const diskExists = await kernel.opfsDriver.diskExists();
+
+if (!diskExists) {
+  OS.addBootLog('volmgr: No disk found. Formatting virtual disk...');
+  const defaultNodes = await kernel.getDefaultNodes();
+  await kernel.opfsDriver.formatDisk(defaultNodes);
+  OS.addBootLog('volmgr: Format complete. Volume C: created.');
+} else {
+  OS.addBootLog('volmgr: Existing disk found. Mounting C:...');
+}
+
+OS.registerDriver({
+  name: 'volmgr',
+  path: 'C:\\\\ObsidianOS\\\\System32\\\\drivers\\\\volmgr.sys',
+  status: 'loaded',
+  type: 'storage',
+  loadOrder: 1,
+  dependencies: [],
+});
+
+OS.addBootLog('volmgr: Volume C: mounted [OPFS]');
+OS.terminate(0);
+    `.trim()
+  ],
+  [
+    'C:\\ObsidianOS\\System32\\drivers\\ntfs.sys',
+    'ntfs.sys',
+    'C:\\ObsidianOS\\System32\\drivers',
+    `
+// ============================================
+// ntfs.sys — NTFS Filesystem Driver
+// Registers async I/O operations with the kernel.
+// Cache was already hydrated by powerOn() if OPFS existed.
+// On first boot, volmgr.sys formatted the disk — hydrate now.
+// ============================================
+OS.addBootLog('ntfs: Initializing NTFS driver...');
+
+// Register the filesystem driver on the kernel
+await kernel.registerFsDriver(kernel.opfsDriver);
+
+// Only hydrate if not already done (first boot after format)
+const alreadyHydrated = kernel.getFsNodeCount() > 0 && kernel.isDiskDriverActive();
+if (!alreadyHydrated) {
+  OS.addBootLog('ntfs: Hydrating filesystem cache...');
+  const count = await kernel.hydrateFromDisk();
+  OS.addBootLog('ntfs: Loaded ' + count + ' nodes into cache.');
+} else {
+  OS.addBootLog('ntfs: Cache already loaded (' + kernel.getFsNodeCount() + ' nodes).');
+}
+
+OS.registerDriver({
+  name: 'ntfs',
+  path: 'C:\\\\ObsidianOS\\\\System32\\\\drivers\\\\ntfs.sys',
+  status: 'loaded',
+  type: 'filesystem',
+  loadOrder: 2,
+  dependencies: ['volmgr'],
+});
+
+OS.addBootLog('ntfs: NTFS driver ready.');
+OS.terminate(0);
+    `.trim()
+  ],
+  [
+    'C:\\ObsidianOS\\System32\\drivers\\vss.sys',
+    'vss.sys',
+    'C:\\ObsidianOS\\System32\\drivers',
+    `
+// ============================================
+// vss.sys — Volume Shadow Copy Service Driver
+// Creates a snapshot of all system files into
+// C:\\System Volume Information\\VSS\\snapshot.json
+// Used by fsStartupRepair to restore files from
+// a real on-disk snapshot instead of hardcoded defaults.
+// ============================================
+OS.addBootLog('vss: Volume Shadow Copy Service starting...');
+
+const SNAPSHOT_FILE = 'C:\\\\System Volume Information\\\\VSS\\\\snapshot.json';
+
+// Snapshot all system files directly from the kernel filesystem map
+const snapshot = {};
+let count = 0;
+
+// kernel._filesystem is a Map<path, FileSystemNode>
+kernel._filesystem.forEach(function(node, path) {
+  if (node.attributes && node.attributes.isSystem && node.type === 'file' && node.content) {
+    snapshot[path] = node.content;
+    count++;
+  }
+});
+
+OS.writeFile(SNAPSHOT_FILE, JSON.stringify({ timestamp: Date.now(), files: snapshot }));
+OS.addBootLog('vss: Snapshot created (' + count + ' system files)');
+
+OS.registerDriver({
+  name: 'vss',
+  path: 'C:\\\\ObsidianOS\\\\System32\\\\drivers\\\\vss.sys',
+  status: 'loaded',
+  type: 'storage',
+  loadOrder: 3,
+  dependencies: ['ntfs'],
+});
+
 OS.terminate(0);
     `.trim()
   ]
@@ -311,17 +474,90 @@ var print = StdIO.print;
     'syscalls.txt',
     'C:\\ObsidianOS\\SDK\\docs',
     `
---- OBSIDIAN OS NATIVE SYSTEM CALLS ---
-Version: 1.0.0-GA
+--- OBSIDIAN OS SYSTEM CALL REFERENCE ---
+Version: 2.0.0-GA
+Loaded libraries: kernel32.dll, hal.dll
 
-1. OS.print(msg)            - Sends text to stdout
-2. OS.error(msg)            - Sends text to stderr
-3. OS.readFile(path)        - Reads file content (UTF-8)
-4. OS.writeFile(path, val)  - Writes/Creates file
-5. OS.listFiles(path)       - Returns array of node names
-6. OS.wait(ms)              - Suspends process execution (async)
-7. OS.terminate(code)       - Halts execution and frees memory
-8. OS.getResources()        - Dumps current CPU/RAM metrics
+════════════════════════════════════════
+ CORE OS API  (always available as OS.*)
+════════════════════════════════════════
+OS.print(msg)               stdout
+OS.error(msg)               stderr
+OS.readFile(path)           read file → string | undefined
+OS.writeFile(path, content) write/create file
+OS.listFiles(path)          list directory → string[]
+OS.wait(ms)                 async sleep
+OS.terminate(exitCode)      exit process
+OS.getResources()           { totalMemory, usedMemory, cpuCores, cpuUsage, uptime, networkUp }
+OS.getEnv(key)              OS | USER
+OS.getTimestamp()           Date.now()
+OS.ping()                   { status, latency }
+OS.loadLibrary(dllPath)     load a .dll module → bool
+OS.pid                      current process id
+OS.args                     string[] of launch arguments
+
+════════════════════════════════════════
+ SDK STDLIB  (obsidian.js, auto-linked)
+════════════════════════════════════════
+StdIO.print(msg)            alias for OS.print
+StdIO.error(msg)            alias for OS.error
+FS.read(path)               alias for OS.readFile
+FS.write(path, content)     alias for OS.writeFile
+FS.ls(path)                 alias for OS.listFiles
+Proc.pid                    current pid
+Proc.args                   launch args
+Proc.exit(code)             alias for OS.terminate
+Proc.wait(ms)               alias for OS.wait
+Kernel.uptime()             seconds since boot
+Kernel.ping()               network ping
+print(msg)                  global alias for StdIO.print
+
+════════════════════════════════════════
+ HAL.DLL  (OS.HAL.*)
+════════════════════════════════════════
+OS.HAL.getCpuInfo()         { cores, usage, architecture, vendor, model, features[] }
+OS.HAL.getMemoryMap()       { totalPhysical, usedPhysical, freePhysical, pageSize, addressWidth }
+OS.HAL.getDiskInfo()        { totalDisk, usedDisk, freeDisk, filesystem, label, driveLetter }
+OS.HAL.getNetworkInfo()     { connected, adapter, mac, speed, type }
+OS.HAL.getPowerState()      { state, batteryLevel, acConnected, sleepStates[] }
+OS.HAL.getSystemTime()      { timestamp, iso, timezone, uptime }
+OS.HAL.raiseInterrupt(irq, desc)  → { irq, handled, timestamp }
+OS.HAL.queryAcpi(table)     query ACPI table → { table, description, status }
+
+════════════════════════════════════════
+ KERNEL32.DLL  (OS.Kernel32.*)
+════════════════════════════════════════
+Process:
+  OS.Kernel32.GetCurrentProcessId()          → pid
+  OS.Kernel32.CreateProcess(name,title,icon) → pid
+  OS.Kernel32.TerminateProcess(pid,code)     → bool
+  OS.Kernel32.GetCommandLine()               → string
+
+Memory:
+  OS.Kernel32.VirtualAlloc(size, name)       → bool
+  OS.Kernel32.GlobalMemoryStatus()           → { totalPhys, availPhys, usedPhys, loadPercent }
+
+File:
+  OS.Kernel32.ReadFile(path)                 → string | undefined
+  OS.Kernel32.WriteFile(path, content)       → void
+  OS.Kernel32.FindFirstFile(path)            → { found, name, index, all[] }
+  OS.Kernel32.FindNextFile(handle)           → { found, name, index, all[] }
+  OS.Kernel32.GetFileAttributes(path)        → { exists, size, readonly, system }
+
+Environment:
+  OS.Kernel32.GetEnvironmentVariable(name)   → string
+  OS.Kernel32.SetEnvironmentVariable(n, v)   → bool
+  OS.Kernel32.GetSystemInfo()                → { processorType, numberOfProcessors, pageSize, ... }
+
+Timing:
+  OS.Kernel32.Sleep(ms)                      → Promise
+  OS.Kernel32.GetTickCount()                 → ms since boot
+  OS.Kernel32.QueryPerformanceCounter()      → timestamp
+
+Error:
+  OS.Kernel32.GetLastError()                 → error code
+  OS.Kernel32.SetLastError(code)             → void
+  OS.Kernel32.FormatMessage(code)            → string
     `.trim()
   ],
   [
@@ -336,6 +572,72 @@ StdIO.print("Running on: " + OS.getEnv('OS'));
 await Proc.wait(500);
 StdIO.print("Closing in 1 second...");
 await Proc.wait(1000);
+Proc.exit(0);
+    `.trim()
+  ],
+  [
+    'C:\\ObsidianOS\\SDK\\examples\\sysdiag.exe',
+    'sysdiag.exe',
+    'C:\\ObsidianOS\\SDK\\examples',
+    `
+// sysdiag.exe — System Diagnostics using HAL + Kernel32
+print("╔══════════════════════════════════╗");
+print("║   ObsidianOS System Diagnostics  ║");
+print("╚══════════════════════════════════╝");
+await Proc.wait(200);
+
+// CPU via HAL
+var cpu = OS.HAL.getCpuInfo();
+print("");
+print("[ CPU ]");
+print("  Model   : " + cpu.model);
+print("  Cores   : " + cpu.cores);
+print("  Usage   : " + cpu.usage.toFixed(1) + "%");
+print("  Features: " + cpu.features.join(", "));
+await Proc.wait(150);
+
+// Memory via HAL + Kernel32
+var mem = OS.HAL.getMemoryMap();
+var memStatus = OS.Kernel32.GlobalMemoryStatus();
+print("");
+print("[ MEMORY ]");
+print("  Total   : " + mem.totalPhysical + " MB");
+print("  Used    : " + mem.usedPhysical.toFixed(1) + " MB");
+print("  Free    : " + mem.freePhysical.toFixed(1) + " MB");
+print("  Load    : " + memStatus.loadPercent + "%");
+await Proc.wait(150);
+
+// Disk via HAL
+var disk = OS.HAL.getDiskInfo();
+print("");
+print("[ DISK ]");
+print("  Drive   : " + disk.driveLetter + ":");
+print("  FS      : " + disk.filesystem);
+print("  Total   : " + (disk.totalDisk / 1024).toFixed(0) + " GB");
+print("  Free    : " + (disk.freeDisk / 1024).toFixed(0) + " GB");
+await Proc.wait(150);
+
+// Network via HAL
+var net = OS.HAL.getNetworkInfo();
+print("");
+print("[ NETWORK ]");
+print("  Adapter : " + net.adapter);
+print("  Status  : " + (net.connected ? "Connected" : "Disconnected"));
+print("  Speed   : " + net.speed);
+var pingRes = OS.ping();
+print("  Ping    : " + pingRes.latency + "ms");
+await Proc.wait(150);
+
+// System time via HAL
+var time = OS.HAL.getSystemTime();
+print("");
+print("[ SYSTEM ]");
+print("  Time    : " + time.iso);
+print("  Uptime  : " + time.uptime + "s");
+print("  PID     : " + OS.Kernel32.GetCurrentProcessId());
+print("  CmdLine : " + (OS.Kernel32.GetCommandLine() || "(none)"));
+print("");
+print("Diagnostics complete.");
 Proc.exit(0);
     `.trim()
   ]
@@ -364,6 +666,235 @@ binaryExes.forEach(([path, name, parent, code]) => {
   defaultNodes[path] = makeBinaryExe(path, name, parent, code);
 });
 
+// =====================================================
+// DLL MODULES — Real JS modules loaded by bootmgr.exe
+// They attach namespaces onto the OS object in the sandbox
+// =====================================================
+const dllModules: [string, string, string, string][] = [
+  [
+    'C:\\ObsidianOS\\System32\\hal.dll',
+    'hal.dll',
+    'C:\\ObsidianOS\\System32',
+    `
+// ============================================
+// hal.dll — Hardware Abstraction Layer
+// Attaches OS.HAL namespace to the sandbox.
+// Provides a uniform interface to physical hardware
+// regardless of underlying platform differences.
+// ============================================
+OS.HAL = {
+  // CPU information
+  getCpuInfo: function() {
+    var res = OS.getResources();
+    return {
+      cores: res.cpuCores,
+      usage: res.cpuUsage,
+      architecture: 'x86_64',
+      vendor: 'ObsidianCorp',
+      model: 'Virtual CPU @ 3.20GHz',
+      features: ['SSE4.2', 'AVX2', 'AES-NI', 'RDRAND']
+    };
+  },
+
+  // Memory map
+  getMemoryMap: function() {
+    var res = OS.getResources();
+    return {
+      totalPhysical: res.totalMemory,
+      usedPhysical: res.usedMemory,
+      freePhysical: res.totalMemory - res.usedMemory,
+      pageSize: 4096,
+      addressWidth: 48
+    };
+  },
+
+  // Disk info
+  getDiskInfo: function() {
+    var res = OS.getResources();
+    return {
+      totalDisk: res.totalDisk,
+      usedDisk: res.usedDisk,
+      freeDisk: res.totalDisk - res.usedDisk,
+      filesystem: 'NTFS',
+      label: 'ObsidianOS',
+      driveLetter: 'C'
+    };
+  },
+
+  // Network hardware
+  getNetworkInfo: function() {
+    var res = OS.getResources();
+    return {
+      connected: res.networkUp,
+      adapter: 'ObsidianNet Virtual Adapter',
+      mac: 'OB:5I:D1:AN:0S:NT',
+      speed: '1 Gbps',
+      type: 'Ethernet'
+    };
+  },
+
+  // Hardware interrupt controller
+  raiseInterrupt: function(irq, description) {
+    OS.addBootLog('HAL: IRQ ' + irq + ' -> ' + description);
+    return { irq: irq, handled: true, timestamp: OS.getTimestamp() };
+  },
+
+  // Power management
+  getPowerState: function() {
+    return {
+      state: 'S0',
+      batteryLevel: 85,
+      acConnected: true,
+      sleepStates: ['S1', 'S3', 'S4', 'S5']
+    };
+  },
+
+  // Timer / clock
+  getSystemTime: function() {
+    var ts = OS.getTimestamp();
+    return {
+      timestamp: ts,
+      iso: new Date(ts).toISOString(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      uptime: OS.getResources().uptime
+    };
+  },
+
+  // ACPI query
+  queryAcpi: function(table) {
+    var tables = { DSDT: 'Differentiated System Description Table', FADT: 'Fixed ACPI Description Table', MADT: 'Multiple APIC Description Table', SSDT: 'Secondary System Description Table' };
+    return { table: table, description: tables[table] || 'Unknown ACPI Table', status: 'present' };
+  }
+};
+`.trim()
+  ],
+  [
+    'C:\\ObsidianOS\\System32\\kernel32.dll',
+    'kernel32.dll',
+    'C:\\ObsidianOS\\System32',
+    `
+// ============================================
+// kernel32.dll — Windows Base API
+// Attaches OS.Kernel32 namespace to the sandbox.
+// Provides process, memory, file, sync, and
+// environment management APIs.
+// ============================================
+OS.Kernel32 = {
+  // ── Process API ──────────────────────────────
+  GetCurrentProcessId: function() {
+    return OS.pid;
+  },
+
+  CreateProcess: function(name, title, icon) {
+    return OS.createProcess(name, title, icon || '⚙️');
+  },
+
+  TerminateProcess: function(pid, exitCode) {
+    OS.terminate(exitCode || 0);
+    return true;
+  },
+
+  GetCommandLine: function() {
+    return OS.args.join(' ');
+  },
+
+  // ── Memory API ───────────────────────────────
+  VirtualAlloc: function(size, name) {
+    return OS.allocateMemory(size, name || 'VirtualAlloc');
+  },
+
+  GlobalMemoryStatus: function() {
+    var mem = OS.getResources();
+    return {
+      totalPhys: mem.totalMemory,
+      availPhys: mem.totalMemory - mem.usedMemory,
+      usedPhys: mem.usedMemory,
+      loadPercent: Math.round((mem.usedMemory / mem.totalMemory) * 100)
+    };
+  },
+
+  // ── File API ─────────────────────────────────
+  ReadFile: function(path) {
+    return OS.readFile(path);
+  },
+
+  WriteFile: function(path, content) {
+    return OS.writeFile(path, content);
+  },
+
+  FindFirstFile: function(path) {
+    var files = OS.listFiles(path);
+    return files.length > 0 ? { found: true, name: files[0], index: 0, all: files } : { found: false };
+  },
+
+  FindNextFile: function(handle) {
+    if (!handle || !handle.all) return { found: false };
+    handle.index++;
+    return handle.index < handle.all.length
+      ? { found: true, name: handle.all[handle.index], index: handle.index, all: handle.all }
+      : { found: false };
+  },
+
+  GetFileAttributes: function(path) {
+    var content = OS.readFile(path);
+    return content !== undefined
+      ? { exists: true, size: content.length, readonly: false, system: path.includes('System32') }
+      : { exists: false };
+  },
+
+  // ── Environment API ──────────────────────────
+  GetEnvironmentVariable: function(name) {
+    var env = { OS: 'ObsidianOS_NT', COMPUTERNAME: 'OBSIDIAN-PC', USERNAME: OS.getEnv('USER'), SYSTEMROOT: 'C:\\\\ObsidianOS', TEMP: 'C:\\\\ObsidianOS\\\\Temp', PATH: 'C:\\\\ObsidianOS\\\\System32;C:\\\\ObsidianOS\\\\SDK\\\\examples', PROCESSOR_ARCHITECTURE: 'AMD64', NUMBER_OF_PROCESSORS: String(OS.getResources().cpuCores) };
+    return env[name] || '';
+  },
+
+  SetEnvironmentVariable: function(name, value) {
+    OS.print('[Kernel32] SetEnvironmentVariable: ' + name + '=' + value);
+    return true;
+  },
+
+  GetSystemInfo: function() {
+    var res = OS.getResources();
+    return {
+      processorType: 'PROCESSOR_AMD64',
+      numberOfProcessors: res.cpuCores,
+      pageSize: 4096,
+      processorLevel: 6,
+      processorRevision: 0x0A00,
+      allocationGranularity: 65536
+    };
+  },
+
+  // ── Sync / Timing API ────────────────────────
+  Sleep: function(ms) {
+    return OS.wait(ms);
+  },
+
+  GetTickCount: function() {
+    return OS.getResources().uptime * 1000;
+  },
+
+  QueryPerformanceCounter: function() {
+    return OS.getTimestamp();
+  },
+
+  // ── Error API ────────────────────────────────
+  GetLastError: function() { return 0; },
+  SetLastError: function(code) { OS.error('[Kernel32] SetLastError: ' + code); },
+
+  FormatMessage: function(code) {
+    var messages = { 0: 'The operation completed successfully.', 2: 'The system cannot find the file specified.', 5: 'Access is denied.', 8: 'Not enough memory resources.', 32: 'The process cannot access the file.', 87: 'The parameter is incorrect.' };
+    return messages[code] || 'Unknown error code: ' + code;
+  }
+};
+`.trim()
+  ]
+];
+
+dllModules.forEach(([path, name, parent, code]) => {
+  defaultNodes[path] = makeBinaryExe(path, name, parent, code);
+});
+
 sdkFiles.forEach(([path, name, parent, code]) => {
   if (path.endsWith('.exe')) {
      defaultNodes[path] = makeBinaryExe(path, name, parent, code);
@@ -376,7 +907,6 @@ sdkFiles.forEach(([path, name, parent, code]) => {
 // DRIVERS - loaded during boot, depend on file existence
 // =====================================================
 const driverFiles: [string, string, string, string][] = [
-  ['C:\\ObsidianOS\\System32\\drivers\\ntfs.sys', 'ntfs.sys', 'C:\\ObsidianOS\\System32\\drivers', 'NTFS File System Driver'],
   ['C:\\ObsidianOS\\System32\\drivers\\disk.sys', 'disk.sys', 'C:\\ObsidianOS\\System32\\drivers', 'Disk Driver'],
   ['C:\\ObsidianOS\\System32\\drivers\\acpi.sys', 'acpi.sys', 'C:\\ObsidianOS\\System32\\drivers', 'ACPI Driver for NT'],
   ['C:\\ObsidianOS\\System32\\drivers\\pci.sys', 'pci.sys', 'C:\\ObsidianOS\\System32\\drivers', 'PCI Bus Driver'],
@@ -388,7 +918,6 @@ const driverFiles: [string, string, string, string][] = [
   ['C:\\ObsidianOS\\System32\\drivers\\tcpip.sys', 'tcpip.sys', 'C:\\ObsidianOS\\System32\\drivers', 'TCP/IP Protocol Driver'],
   ['C:\\ObsidianOS\\System32\\drivers\\ndis.sys', 'ndis.sys', 'C:\\ObsidianOS\\System32\\drivers', 'NDIS System Driver'],
   ['C:\\ObsidianOS\\System32\\drivers\\hdaudio.sys', 'hdaudio.sys', 'C:\\ObsidianOS\\System32\\drivers', 'High Definition Audio Driver'],
-  ['C:\\ObsidianOS\\System32\\drivers\\volmgr.sys', 'volmgr.sys', 'C:\\ObsidianOS\\System32\\drivers', 'Volume Manager Driver'],
   ['C:\\ObsidianOS\\System32\\drivers\\fltMgr.sys', 'fltMgr.sys', 'C:\\ObsidianOS\\System32\\drivers', 'Filter Manager Driver'],
   ['C:\\ObsidianOS\\System32\\drivers\\Wdf01000.sys', 'Wdf01000.sys', 'C:\\ObsidianOS\\System32\\drivers', 'WDF Framework'],
 ];
@@ -405,15 +934,22 @@ const files: [string, string, string, string, string, number][] = [
   ['C:\\Users\\User\\Documents\\notes.txt', 'notes.txt', 'C:\\Users\\User\\Documents', 'txt', 'My Notes\n========\n\n- Learn ObsidianOS\n- Customize desktop\n- Try the terminal\n- Open Task Manager to see real processes\n- Use "reg query" in terminal to browse registry', 0],
   ['C:\\Users\\User\\Documents\\project.js', 'project.js', 'C:\\Users\\User\\Documents', 'js', '// ObsidianOS Project\nconsole.log("Hello from ObsidianOS!");\n\nfunction main() {\n  return "Welcome to ObsidianOS";\n}\n\nmain();', 0],
   ['C:\\Users\\User\\Documents\\report.html', 'report.html', 'C:\\Users\\User\\Documents', 'html', '<!DOCTYPE html>\n<html>\n<head><title>Report</title></head>\n<body>\n<h1>ObsidianOS Report</h1>\n<p>System running smoothly.</p>\n</body>\n</html>', 0],
-  // System configuration files
-  ['C:\\ObsidianOS\\System32\\win.ini', 'win.ini', 'C:\\ObsidianOS\\System32', 'ini', '; ObsidianOS System Configuration\n[ObsidianOS]\nload=\nrun=\n[Desktop]\nWallpaper=default\nTileWallpaper=0', 0],
-  ['C:\\ObsidianOS\\System32\\boot.ini', 'boot.ini', 'C:\\ObsidianOS\\System32', 'ini', '[boot loader]\ntimeout=30\ndefault=multi(0)disk(0)rdisk(0)partition(1)\\OBSIDIANOS\n[operating systems]\nmulti(0)disk(0)rdisk(0)partition(1)\\OBSIDIANOS="ObsidianOS Professional" /fastdetect', 0],
-  ['C:\\ObsidianOS\\System32\\config\\SYSTEM', 'SYSTEM', 'C:\\ObsidianOS\\System32\\config', 'dat', '[Registry Hive]\nType=SYSTEM\nLastWritten=' + now, 0],
-  ['C:\\ObsidianOS\\System32\\config\\SOFTWARE', 'SOFTWARE', 'C:\\ObsidianOS\\System32\\config', 'dat', '[Registry Hive]\nType=SOFTWARE\nLastWritten=' + now, 0],
-  ['C:\\ObsidianOS\\System32\\config\\SAM', 'SAM', 'C:\\ObsidianOS\\System32\\config', 'dat', '[Registry Hive]\nType=SAM\nSecurity=ENCRYPTED\nLastWritten=' + now, 0],
-  ['C:\\ObsidianOS\\System32\\config\\SECURITY', 'SECURITY', 'C:\\ObsidianOS\\System32\\config', 'dat', '[Registry Hive]\nType=SECURITY\nLastWritten=' + now, 0],
 ];
 
 files.forEach(([path, name, parent, ext, content, size]) => {
   defaultNodes[path] = makeFile(path, name, parent, ext, content, size);
+});
+
+// System config files — marked as system so fsStartupRepair can restore them
+const sysConfigFiles: [string, string, string, string, string][] = [
+  ['C:\\ObsidianOS\\System32\\win.ini', 'win.ini', 'C:\\ObsidianOS\\System32', 'ini', '; ObsidianOS System Configuration\n[ObsidianOS]\nload=\nrun=\n[Desktop]\nWallpaper=default\nTileWallpaper=0'],
+  ['C:\\ObsidianOS\\System32\\boot.ini', 'boot.ini', 'C:\\ObsidianOS\\System32', 'ini', '[boot loader]\ntimeout=30\ndefault=multi(0)disk(0)rdisk(0)partition(1)\\OBSIDIANOS\n[operating systems]\nmulti(0)disk(0)rdisk(0)partition(1)\\OBSIDIANOS="ObsidianOS Professional" /fastdetect'],
+  ['C:\\ObsidianOS\\System32\\config\\SYSTEM', 'SYSTEM', 'C:\\ObsidianOS\\System32\\config', 'dat', '[Registry Hive]\nType=SYSTEM\nLastWritten=' + now],
+  ['C:\\ObsidianOS\\System32\\config\\SOFTWARE', 'SOFTWARE', 'C:\\ObsidianOS\\System32\\config', 'dat', '[Registry Hive]\nType=SOFTWARE\nLastWritten=' + now],
+  ['C:\\ObsidianOS\\System32\\config\\SAM', 'SAM', 'C:\\ObsidianOS\\System32\\config', 'dat', '[Registry Hive]\nType=SAM\nSecurity=ENCRYPTED\nLastWritten=' + now],
+  ['C:\\ObsidianOS\\System32\\config\\SECURITY', 'SECURITY', 'C:\\ObsidianOS\\System32\\config', 'dat', '[Registry Hive]\nType=SECURITY\nLastWritten=' + now],
+];
+
+sysConfigFiles.forEach(([path, name, parent, ext, content]) => {
+  defaultNodes[path] = makeSysFile(path, name, parent, ext, content);
 });

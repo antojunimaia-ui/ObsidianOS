@@ -1,28 +1,43 @@
 // ============================================
 // File Explorer App
 // ============================================
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useFileSystem } from '../../stores/fileSystem';
 import { useWindowManager } from '../../stores/windowManager';
 import { useProcessManager } from '../../stores/processManager';
 import { useContextMenuStore } from '../../stores/contextMenuStore';
 import { useAppRegistry } from '../../core/appRegistry';
+import { useRubberBand } from '../../hooks/useRubberBand';
 import kernel from '../../core/kernel';
 import './FileExplorer.css';
 
 export default function FileExplorerApp({ windowId }: { windowId: string }) {
   const [currentPath, setCurrentPath] = useState('C:\\Users\\User');
-  const [selectedItem, setSelectedItem] = useState<string | null>(null);
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'list' | 'grid' | 'details'>('details');
   const [pathInput, setPathInput] = useState(currentPath);
   const [isEditingPath, setIsEditingPath] = useState(false);
-  
+  const itemRefs = useRef<Map<string, HTMLElement>>(new Map());
+
   const { getNode, getChildren, deleteNode } = useFileSystem();
   const { updateWindowTitle } = useWindowManager();
   const openWindow = useWindowManager(s => s.openWindow);
   const createProcess = useProcessManager(s => s.createProcess);
   const { openContextMenu } = useContextMenuStore();
   const apps = useAppRegistry((s: any) => s.apps);
+
+  const getItemRects = useCallback(() => {
+    const map = new Map<string, DOMRect>();
+    itemRefs.current.forEach((el, key) => {
+      if (el) map.set(key, el.getBoundingClientRect());
+    });
+    return map;
+  }, []);
+
+  const { selectionRect, onMouseDown, containerRef } = useRubberBand({
+    onSelectionChange: (keys) => setSelectedItems(new Set(keys)),
+    getItemRects,
+  });
 
   const children = getChildren(currentPath);
   const dirs = children.filter(c => c.type === 'directory').sort((a, b) => a.name.localeCompare(b.name));
@@ -34,7 +49,7 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
     if (node && node.type === 'directory') {
       setCurrentPath(path);
       setPathInput(path);
-      setSelectedItem(null);
+      setSelectedItems(new Set());
       updateWindowTitle(windowId, `${node.name} - Explorador de Arquivos`);
     }
   }, [getNode, windowId, updateWindowTitle]);
@@ -69,7 +84,26 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
             return;
           }
         } else if (isBinary) {
-          // Native binary: Run it in a Terminal
+          // Distinguish real system PE binaries from SDK (JS) executables.
+          // makeSysExe content starts with "[name.exe]" — SDK code does not.
+          const isSdkApp = node.content && !node.content.trimStart().startsWith('[');
+
+          if (isSdkApp) {
+            // SDK app: open with SdkAppRunner
+            const pid = createProcess(`sdk:${node.name}`, node.name, '⚡');
+            openWindow({
+              title: node.name,
+              icon: '⚡',
+              appId: `sdk:${node.name}`,
+              width: 600,
+              height: 400,
+              processId: pid,
+              params: { binaryPath: node.path },
+            });
+            return;
+          }
+
+          // Real system binary (PE32+): run in Terminal
           const terminalApp = apps['terminal'];
           if (terminalApp) {
             const pid = createProcess(terminalApp.id, terminalApp.name, '💻');
@@ -78,7 +112,7 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
               icon: '💻', appId: 'terminal',
               processId: pid,
               width: 700, height: 450,
-              params: { command: node.path } // Tell terminal to run this file
+              params: { command: node.path }
             });
             return;
           }
@@ -147,7 +181,7 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
   const handleItemContextMenu = (e: React.MouseEvent, node: any) => {
     e.preventDefault();
     e.stopPropagation();
-    setSelectedItem(node.path);
+    setSelectedItems(prev => new Set([...prev, node.path]));
     openContextMenu(e.clientX, e.clientY, [
       { id: 'open', label: 'Abrir', icon: '📂', onClick: () => handleDoubleClick(node) },
       { id: 'sep1', label: '', separator: true },
@@ -283,7 +317,12 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
         </div>
 
         {/* Main Content */}
-        <div className="explorer-content" onContextMenu={handleContentContextMenu}>
+        <div
+          className="explorer-content"
+          ref={el => { containerRef.current = el; }}
+          onMouseDown={onMouseDown}
+          onContextMenu={handleContentContextMenu}
+        >
           {viewMode === 'details' ? (
             <table className="explorer-table">
               <thead>
@@ -298,8 +337,9 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
                 {sortedChildren.map(node => (
                   <tr
                     key={node.path}
-                    className={`explorer-row ${selectedItem === node.path ? 'selected' : ''}`}
-                    onClick={() => setSelectedItem(node.path)}
+                    ref={el => { if (el) itemRefs.current.set(node.path, el); else itemRefs.current.delete(node.path); }}
+                    className={`explorer-row ${selectedItems.has(node.path) ? 'selected' : ''}`}
+                    onClick={() => setSelectedItems(new Set([node.path]))}
                     onDoubleClick={() => handleDoubleClick(node)}
                     onContextMenu={(e) => handleItemContextMenu(e, node)}
                   >
@@ -319,8 +359,9 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
               {sortedChildren.map(node => (
                 <div
                   key={node.path}
-                  className={`explorer-grid-item ${selectedItem === node.path ? 'selected' : ''}`}
-                  onClick={() => setSelectedItem(node.path)}
+                  ref={el => { if (el) itemRefs.current.set(node.path, el); else itemRefs.current.delete(node.path); }}
+                  className={`explorer-grid-item ${selectedItems.has(node.path) ? 'selected' : ''}`}
+                  onClick={() => setSelectedItems(new Set([node.path]))}
                   onDoubleClick={() => handleDoubleClick(node)}
                   onContextMenu={(e) => handleItemContextMenu(e, node)}
                 >
@@ -330,11 +371,24 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
               ))}
             </div>
           )}
-          
+
           {sortedChildren.length === 0 && (
             <div className="explorer-empty">
               Esta pasta está vazia.
             </div>
+          )}
+
+          {/* Rubber band selection box */}
+          {selectionRect && (
+            <div
+              className="explorer-selection-box"
+              style={{
+                left: selectionRect.x,
+                top: selectionRect.y,
+                width: selectionRect.width,
+                height: selectionRect.height,
+              }}
+            />
           )}
         </div>
       </div>
@@ -342,7 +396,7 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
       {/* Status Bar */}
       <div className="explorer-statusbar">
         <span>{sortedChildren.length} itens</span>
-        {selectedItem && <span>1 item selecionado</span>}
+        {selectedItems.size > 0 && <span>{selectedItems.size} {selectedItems.size === 1 ? 'item selecionado' : 'itens selecionados'}</span>}
         <div className="explorer-view-toggle">
           <button
             className={viewMode === 'details' ? 'active' : ''}

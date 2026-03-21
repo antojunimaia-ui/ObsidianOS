@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useSystem } from './stores/systemStore';
 import BootScreen from './components/Boot/BootScreen';
 import BSOD from './components/Boot/BSOD';
+import RecoveryMode from './components/Boot/RecoveryMode';
 import { useFileSystem } from './stores/fileSystem';
 import { useProcessManager } from './stores/processManager';
 import { useWindowManager } from './stores/windowManager';
@@ -25,11 +26,17 @@ export default function App() {
   const { bootPhase, theme } = useSystem();
   const [isBSOD, setIsBSOD] = useState(false);
   const [bsodInfo, setBsodInfo] = useState<any>(null);
+  const [isRecovery] = useState(() => {
+    const count = parseInt(localStorage.getItem('obsidianos_crash_count') ?? '0', 10);
+    return count >= 3;
+  });
   const getRegValue = useRegistry(s => s.getValue);
 
   // Sync Hardware from Registry
   useEffect(() => {
     if (bootPhase === 'desktop') {
+      // Successful boot — reset crash counter
+      localStorage.removeItem('obsidianos_crash_count');
       const ram = getRegValue('HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\\PhysicalMemoryMB');
       if (typeof ram === 'number') {
         (kernel as any)._resources.totalMemory = ram;
@@ -133,45 +140,6 @@ export default function App() {
     }
   }, [user32, bootPhase]);
 
-  // DEEP REALISM: Watch Critical Processes
-  const csrss = useProcessManager(s => s.processes.some(p => p.name === 'csrss.exe'));
-  const wininit = useProcessManager(s => s.processes.some(p => p.name === 'wininit.exe'));
-  const lsass = useProcessManager(s => s.processes.some(p => p.name === 'lsass.exe'));
-  const smss = useProcessManager(s => s.processes.some(p => p.name === 'smss.exe'));
-  const servicesProc = useProcessManager(s => s.processes.some(p => p.name === 'services.exe'));
-  const dwm = useProcessManager(s => s.processes.some(p => p.name === 'dwm.exe'));
-  const systemProc = useProcessManager(s => s.processes.some(p => p.name === 'System'));
-
-  useEffect(() => {
-    if (bootPhase !== 'desktop' || isBSOD) return;
-
-    let failed = '';
-    let stopCode = 'CRITICAL_PROCESS_DIED';
-    let technical = 'A critical system process terminated.';
-
-    if (!systemProc) { failed = 'ntoskrnl.exe'; technical = 'The System kernel process was terminated.'; }
-    else if (!smss) { failed = 'smss.exe'; technical = 'Session Manager Subsystem process died.'; }
-    else if (!csrss) { failed = 'csrss.exe'; technical = 'Client Server Runtime Process died.'; }
-    else if (!wininit) { failed = 'wininit.exe'; technical = 'Windows Start-Up Application stopped.'; }
-    else if (!lsass) { failed = 'lsass.exe'; technical = 'Local Security Authority Process encountered a critical error.'; }
-    else if (!servicesProc) { failed = 'services.exe'; technical = 'Services and Controller App stopped.'; }
-    else if (!dwm) { 
-      failed = 'dwm.exe'; 
-      stopCode = 'DESKTOP_WINDOW_MANAGER_DIED';
-      technical = 'Desktop Window Manager (DWM) encountered a fatal error and could not be restarted.';
-    }
-
-    if (failed) {
-      kernel.triggerBSOD({
-         stopCode,
-         technicalInfo: technical,
-         failedComponent: failed,
-         bugCheckCode: '0x000000EF',
-         parameters: ['0x00000000', '0x00000000', '0x00000000', '0x00000000']
-      });
-    }
-  }, [csrss, wininit, lsass, smss, servicesProc, dwm, systemProc, bootPhase, isBSOD]);
-
   // DEEP REALISM: CPU/RAM monitorados via processos
   const processes = useProcessManager(s => s.processes);
 
@@ -197,7 +165,9 @@ export default function App() {
 
   return (
     <div className="obsidianos-root" data-theme={theme.mode}>
-      {isBSOD && bsodInfo ? (
+      {isRecovery ? (
+        <RecoveryMode />
+      ) : isBSOD && bsodInfo ? (
         <BSOD info={bsodInfo} />
       ) : (
         <>

@@ -1,8 +1,9 @@
 // ============================================
 // Window Renderer - Renders all open windows
 // ============================================
+import { Suspense } from 'react';
 import { useWindowManager } from '../../stores/windowManager';
-import { useAppRegistry, getAppComponent } from '../../core/appRegistry';
+import { getAppComponent } from '../../core/appRegistry';
 import Window from './Window';
 
 export default function WindowRenderer() {
@@ -12,11 +13,12 @@ export default function WindowRenderer() {
     <>
       {windows.map(win => {
         const AppComponent = getAppComponent(win.appId);
-        if (!AppComponent) return null;
 
         return (
           <Window key={win.id} windowId={win.id}>
-            <AppComponent windowId={win.id} />
+            <Suspense fallback={null}>
+              <AppComponent windowId={win.id} />
+            </Suspense>
           </Window>
         );
       })}

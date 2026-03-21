@@ -1,0 +1,53 @@
+.sdk-runner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #0c0c0c;
+  color: #cccccc;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.sdk-runner__output {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.sdk-runner__line {
+  line-height: 1.5;
+  margin: 0;
+}
+
+.sdk-runner__line--stderr {
+  color: #f14c4c;
+}
+
+.sdk-runner__line--system {
+  color: #888;
+  font-style: italic;
+}
+
+.sdk-runner__status {
+  padding: 4px 12px;
+  background: #1a1a1a;
+  border-top: 1px solid #333;
+  font-size: 11px;
+  color: #666;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sdk-runner__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4ec94e;
+}
+
+.sdk-runner__dot--done {
+  background: #666;
+}

@@ -1,12 +1,13 @@
 // ============================================
 // Desktop Component
 // ============================================
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useSystem } from '../../stores/systemStore';
 import { useWindowManager } from '../../stores/windowManager';
 import { useProcessManager } from '../../stores/processManager';
 import { useContextMenuStore } from '../../stores/contextMenuStore';
 import { useAppRegistry } from '../../core/appRegistry';
+import { useRubberBand } from '../../hooks/useRubberBand';
 import defaultWallpaper from '../../assets/wallpapers/default.png';
 import './Desktop.css';
 
@@ -32,7 +33,21 @@ export default function Desktop() {
   const createProcess = useProcessManager(s => s.createProcess);
   const { openContextMenu } = useContextMenuStore();
   const apps = useAppRegistry((s: any) => s.apps);
-  const [selectedIcon, setSelectedIcon] = useState<string | null>(null);
+  const [selectedIcons, setSelectedIcons] = useState<Set<string>>(new Set());
+  const iconRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  const getItemRects = useCallback(() => {
+    const map = new Map<string, DOMRect>();
+    iconRefs.current.forEach((el, key) => {
+      if (el) map.set(key, el.getBoundingClientRect());
+    });
+    return map;
+  }, []);
+
+  const { selectionRect, onMouseDown, containerRef } = useRubberBand({
+    onSelectionChange: (keys) => setSelectedIcons(new Set(keys)),
+    getItemRects,
+  });
 
   const handleOpenApp = useCallback((appId: string) => {
     if (!appId) return;
@@ -50,6 +65,7 @@ export default function Desktop() {
       minHeight: app.minHeight,
       isResizable: app.isResizable,
       processId: pid,
+      params: app.binaryPath ? { binaryPath: app.binaryPath } : undefined,
     });
   }, [openWindow, createProcess, apps]);
 
@@ -86,7 +102,7 @@ export default function Desktop() {
   }, [closeStartMenu, openContextMenu, handleOpenApp]);
 
   const handleDesktopClick = useCallback(() => {
-    setSelectedIcon(null);
+    setSelectedIcons(new Set());
     closeStartMenu();
   }, [closeStartMenu]);
 
@@ -100,18 +116,22 @@ export default function Desktop() {
     <div
       className="desktop"
       style={{ backgroundImage: `url(${currentWallpaper})` }}
+      ref={el => { containerRef.current = el; }}
       onClick={handleDesktopClick}
+      onMouseDown={onMouseDown}
       onContextMenu={handleContextMenu}
     >
       <div className="desktop-icons">
         {defaultIcons.map((icon, index) => (
           <div
             key={icon.id}
-            className={`desktop-icon ${selectedIcon === icon.id ? 'selected' : ''}`}
+            ref={el => { if (el) iconRefs.current.set(icon.id, el); else iconRefs.current.delete(icon.id); }}
+            className={`desktop-icon ${selectedIcons.has(icon.id) ? 'selected' : ''}`}
             style={{ '--icon-index': index } as React.CSSProperties}
+            data-no-select
             onClick={(e) => {
               e.stopPropagation();
-              setSelectedIcon(icon.id);
+              setSelectedIcons(new Set([icon.id]));
               closeStartMenu();
             }}
             onDoubleClick={() => handleDoubleClick(icon.appId)}
@@ -121,6 +141,19 @@ export default function Desktop() {
           </div>
         ))}
       </div>
+
+      {/* Rubber band selection box */}
+      {selectionRect && (
+        <div
+          className="desktop-selection-box"
+          style={{
+            left: selectionRect.x,
+            top: selectionRect.y,
+            width: selectionRect.width,
+            height: selectionRect.height,
+          }}
+        />
+      )}
     </div>
   );
 }
