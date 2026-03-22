@@ -1,43 +1,43 @@
 # 🖥️ ObsidianOS
 
-> Um sistema operacional completo rodando inteiramente no navegador, construído com React, TypeScript e Vite. Simula fielmente a experiência de um OS moderno — com BIOS nativa, kernel executável, sistema de arquivos em disco (OPFS), registro, processos, janelas, BSOD e muito mais.
+> Um sistema operacional completo rodando inteiramente no navegador, construído com React, TypeScript e Vite. Simula fielmente a experiência de um OS moderno — com BIOS real, kernel executável, disco virtual OPFS, sistema de arquivos persistente, registro, processos, janelas, BSOD, Recovery Mode e muito mais.
 
 ---
 
 ## 📋 Índice
 
-1. [Visão Geral](#visão-geral)
-2. [Stack Tecnológica](#stack-tecnológica)
-3. [Estrutura do Projeto](#estrutura-do-projeto)
-4. [Como Rodar](#como-rodar)
-5. [Arquitetura do Sistema](#arquitetura-do-sistema)
-6. [Fluxo de Boot](#fluxo-de-boot)
-7. [Componentes da Interface](#componentes-da-interface)
-8. [Aplicativos Integrados](#aplicativos-integrados)
-9. [Mecânicas de Realismo](#mecânicas-de-realismo)
-10. [Como Adicionar um Novo Aplicativo](#como-adicionar-um-novo-aplicativo)
+1. [Visão Geral](#-visão-geral)
+2. [Stack Tecnológica](#-stack-tecnológica)
+3. [Estrutura do Projeto](#-estrutura-do-projeto)
+4. [Como Rodar](#-como-rodar)
+5. [Arquitetura do Sistema](#-arquitetura-do-sistema)
+6. [Fluxo de Boot](#-fluxo-de-boot)
+7. [Componentes da Interface](#-componentes-da-interface)
+8. [Aplicativos Integrados](#-aplicativos-integrados)
+9. [Processos e Drivers do Sistema](#-processos-e-drivers-do-sistema)
+10. [SDK de Aplicativos](#-sdk-de-aplicativos)
+11. [Mecânicas de Realismo](#-mecânicas-de-realismo)
+12. [Como Adicionar um Novo Aplicativo](#-como-adicionar-um-novo-aplicativo)
 
 ---
 
 ## 🎯 Visão Geral
 
-**ObsidianOS** é uma simulação completa de um sistema operacional moderno (inspirado no Windows 11), rodando 100% no navegador. Não é apenas uma casca visual, mas um sistema com arquitetura em camadas:
+**ObsidianOS** é uma simulação completa de um sistema operacional moderno (inspirado no Windows 11), rodando 100% no navegador. Não é apenas uma casca visual:
 
-- **BIOS + Boot Manager nativos** — o kernel real executa `bootmgr.exe` como um binário JavaScript sandboxado.
-- **Kernel Singleton robusto** — gerencia processos, memória, drivers, serviços, system calls e um execution engine real.
-- **Sistema de Arquivos persistente (OPFS)** — utiliza a **Origin Private File System API** para I/O de disco de alto desempenho e persistência real (fallback para `localStorage`).
-- **Registro do Sistema (Registry)** — suporte completo a hives (`HKLM`, `HKCU`) e tipos de dados reais (`REG_SZ`, `REG_DWORD`, `REG_BINARY`).
-- **Gerenciamento de Processos** — PIDs, estados (running, suspended, defunct) e limites de recursos (CPU/RAM).
-- **Gerenciador de Janelas (DWM)** — suporte a drag-and-drop, resize em 8 direções, snap layout e z-index dinâmico.
-- **BSOD (Tela Azul da Morte)** — disparada por falhas reais de sistema, falta de recursos ou corrupção de arquivos críticos.
-- **Ecossistema de Apps** — 9 aplicativos completos e funcionais, incluindo Terminal com 20+ comandos e SDK App Runner.
+- **BIOS + Boot Manager reais** — o kernel executa `bootmgr.exe` como um binário JavaScript real dentro de um sandbox
+- **Kernel singleton** com sistema de eventos, logging, gerenciamento de recursos e execution engine
+- **Disco virtual OPFS** — persistência real via Origin Private File System do navegador, com fallback para `localStorage`
+- **Sistema de arquivos virtual** com permissões, atributos, metadados e suporte a executáveis JS
+- **Registro do sistema** completo com hives reais: `HKEY_LOCAL_MACHINE`, `HKEY_CURRENT_USER`, `HKEY_CLASSES_ROOT
+- **8 aplicativos completos** incluindo Terminal com 20+ comandos, Explorador de Arquivos, Gerenciador de Tarefas com gráficos em tempo real, e mais
 
 ---
 
 ## 🛠️ Stack Tecnológica
 
 | Categoria | Tecnologia | Versão |
-|-----------|------------|--------|
+|-----------|-----------|--------|
 | Framework UI | React | 19.2+ |
 | Linguagem | TypeScript | 5.9+ |
 | Build Tool | Vite | 8.0+ |
@@ -52,7 +52,7 @@
 
 ## 📁 Estrutura do Projeto
 
-```text
+```
 ObsidianOS/
 ├── public/
 │   ├── favicon.svg
@@ -67,8 +67,7 @@ ObsidianOS/
     │   ├── kernel.ts             # Kernel singleton — coração do sistema
     │   ├── appRegistry.ts        # Registro dinâmico de aplicativos
     │   ├── defaultFileSystem.ts  # Filesystem padrão + binários executáveis
-    │   ├── defaultRegistry.ts    # Registro padrão do sistema
-    │   └── opfsDriver.ts         # Driver de baixo nível para persistência em disco (OPFS)
+    │   └── defaultRegistry.ts    # Registro padrão do sistema
     ├── stores/
     │   ├── fileSystem.ts         # Mirror reativo do FS do kernel
     │   ├── registry.ts           # Mirror reativo do registry do kernel
@@ -79,7 +78,7 @@ ObsidianOS/
     ├── contexts/
     │   └── ProcessContext.tsx    # Contexto de processo por janela
     ├── components/
-    │   ├── Boot/                 # BootScreen + BSOD + RecoveryMode
+    │   ├── Boot/                 # BootScreen + BSOD
     │   ├── LockScreen/           # Tela de bloqueio / login
     │   ├── Desktop/              # Desktop com ícones e wallpaper
     │   ├── Taskbar/              # Barra de tarefas
@@ -95,8 +94,7 @@ ObsidianOS/
         ├── Calculator/
         ├── Browser/
         ├── Settings/
-        ├── Regedit/
-        └── SdkAppRunner/
+        └── Regedit/
 ```
 
 ---
@@ -124,7 +122,7 @@ SPA pura sem backend — pode ser hospedada em qualquer CDN estático (Vercel, N
 
 ## 🏗️ Arquitetura do Sistema
 
-```text
+```
 ┌─────────────────────────────────────────┐
 │           CAMADA DE APLICATIVOS         │
 │  Terminal | Explorer | TaskManager | …  │
@@ -141,7 +139,7 @@ SPA pura sem backend — pode ser hospedada em qualquer CDN estático (Vercel, N
 └─────────────────────────────────────────┘
 ```
 
-Todos os Zustand stores operam como **mirrors reativos** do kernel. A fonte da verdade do estado e da lógica vive inteiramente no `Kernel` singleton. Os stores refletem o estado via eventos (`kernel.on('reset', ...)`, `kernel.on('system:snapshot', ...)`). Isso garante que o estado do SO não dependa do ciclo de vida dos componentes React.
+Todos os Zustand stores operam como **mirrors reativos** do kernel. A fonte da verdade do estado e da lógica vive inteiramente no `Kernel` singleton. Os stores refletem o estado via eventos (`kernel.on('reset', ...)`, `kernel.on('system:snapshot', ...)`).
 
 ---
 
@@ -156,20 +154,20 @@ Singleton clássico — uma única instância em toda a aplicação.
 | **BIOS / Boot** | Executa `powerOn()`, roda `bootmgr.exe` como binário real |
 | **Execution Engine** | Executa arquivos `.exe` do filesystem como scripts JS em sandbox |
 | **Logging** | 6 níveis: `DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL`, `FATAL` |
-| **Recursos** | CPU, RAM e disco gerenciados em tempo real |
-| **Drivers** | Registra e consulta drivers carregados (ex: `ntfs.sys`, `disk.sys`) |
-| **Serviços** | Gerencia processos de segundo plano (ex: `svchost.exe`, `spoolsv.exe`) |
+| **Recursos** | CPU, RAM e disco em tempo real |
+| **Drivers** | Registra e consulta drivers carregados |
+| **Serviços** | Registra e atualiza status de serviços |
 | **BSOD** | Dispara tela azul com stop code e informações técnicas |
 | **Eventos** | Sistema pub/sub interno (`on`, `once`, `emit`, `off`) |
-| **Filesystem** | CRUD do VFS com persistencia via OPFS ou LocalStorage |
-| **Registry** | CRUD do registro do sistema com suporte a hives reais |
-| **Processos** | Criação, encerramento e monitoramento de PIDs |
-| **Janelas** | Orquestração do z-pos, foco e geometria das janelas |
-| **App Discovery** | Varre `System32` por manifestos JSON e auto-registra os apps |
+| **Filesystem** | CRUD completo do filesystem virtual |
+| **Registry** | CRUD completo do registro do sistema |
+| **Processos** | Criação, encerramento, suspensão de processos |
+| **Janelas** | Abertura, fechamento, foco, resize, maximizar de janelas |
+| **App Discovery** | Varre `System32` por manifestos JSON e registra apps |
 
 #### Fases do Boot (`BootPhase`)
 
-```text
+```
 OFF → BIOS_POST → BIOS_HARDWARE → BOOTLOADER → KERNEL_INIT → DRIVER_LOAD
     → SERVICE_INIT → SHELL_INIT → DESKTOP_READY
     → BOOT_FAILURE | BSOD
@@ -182,13 +180,21 @@ kernel.powerOn()                   // Inicia o boot (BIOS → bootmgr.exe)
 kernel.finalizeBoot()              // Chamado pelo bootmgr.exe ao terminar
 kernel.loadShell()                 // Carrega explorer.exe + descobre apps
 kernel.on(event, callback)         // Subscrição de eventos
+kernel.emit(event, ...args)        // Emissão de eventos
 kernel.log(level, source, message) // Logging (FATAL → BSOD automático)
-kernel.triggerBSOD(info)           // Dispara BSOD manually
-kernel.allocateMemory(mb, name)    // Aloca RAM virtual
-kernel.createProcess(...)          // Cria processo na tabela do kernel
-kernel.openWindow(config)          // Abre instância de app
-kernel.fsGetNode(path)             // Lê nó do filesystem (VFS)
+kernel.triggerBSOD(info)           // Dispara BSOD
+kernel.allocateMemory(mb, name)    // Aloca RAM
+kernel.freeMemory(mb)              // Libera RAM
+kernel.createProcess(...)          // Cria processo
+kernel.terminateProcess(pid)       // Encerra processo
+kernel.openWindow(config)          // Abre janela
+kernel.closeWindow(id)             // Fecha janela
+kernel.fsGetNode(path)             // Lê nó do filesystem
+kernel.fsCreateFile(...)           // Cria arquivo
+kernel.fsDeleteNode(path)          // Deleta arquivo/pasta
 kernel.regGetValue(path)           // Lê valor do registro
+kernel.regSetValue(path, ...)      // Escreve valor no registro
+kernel.scanSystemApps(fs, reg)     // Descobre e registra apps
 kernel.reset()                     // Reseta estado (reboot)
 ```
 
@@ -201,14 +207,19 @@ O kernel possui um **execution engine** que executa arquivos `.exe` do filesyste
 Cada binário recebe o objeto `OS` com a API do sistema:
 
 ```javascript
-OS.addBootLog(msg)       // Escreve no log de boot (BIOS mode)
+OS.addBootLog(msg)       // Escreve no log de boot
 OS.setBootPhase(phase)   // Muda fase do boot
-OS.finalizeBoot()        // Sinaliza fim do boot ao kernel
-OS.readFile(path)        // Lê arquivo do VFS
-OS.writeFile(path, c)    // Escreve arquivo no VFS
-OS.createProcess(...)    // Cria processo paralelo
-OS.allocateMemory(mb, n) // Aloca RAM virtual
-OS.wait(ms)              // Aguarda (async sleep)
+OS.finalizeBoot()        // Sinaliza fim do boot
+OS.triggerBSOD(info)     // Dispara BSOD
+OS.readFile(path)        // Lê arquivo do FS
+OS.writeFile(path, c)    // Escreve arquivo no FS
+OS.listFiles(path)       // Lista arquivos
+OS.createProcess(...)    // Cria processo
+OS.allocateMemory(mb, n) // Aloca RAM
+OS.registerDriver(entry) // Registra driver
+OS.registerService(entry)// Registra serviço
+OS.terminate(exitCode)   // Encerra o processo
+OS.wait(ms)              // Aguarda (async)
 ```
 
 O SDK em `C:\ObsidianOS\SDK\lib\obsidian.js` é automaticamente injetado antes de cada execução.
@@ -217,46 +228,66 @@ O SDK em `C:\ObsidianOS\SDK\lib\obsidian.js` é automaticamente injetado antes d
 
 ### Fluxo de Boot
 
-O boot é inteiramente orquestrado pelo kernel via handoff de baixo nível.
+O boot é inteiramente orquestrado pelo kernel — não existe mais um `bootSequence.ts` separado.
 
-```text
-1. Power ON: BootScreen monta e chama kernel.powerOn().
-2. BIOS POST:
-   - Validação de hardware e memória.
-   - Montagem do disco via opfsDriver (se disponível).
-   - fsRepairSystemFiles() garante que os binários críticos estão íntegros.
-3. BOOTLOADER:
-   - Kernel localiza e executa C:\ObsidianOS\System32\bootmgr.exe.
-   - bootmgr.exe roda em um thread simulado (via code execution engine).
-4. KERNEL HANDOVER:
-   - bootmgr.exe carrega drivers críticos (ntfs.sys, display.sys).
-   - Registra serviços base e chama OS.finalizeBoot().
-5. SHELL LOADING:
-   - kernel.loadShell() executa o processo explorer.exe.
-   - App Discovery (scanSystemApps) varre o disco por manifestos JSON.
-6. LOGIN UI:
-   - Transição para LockScreen -> Login do usuário.
-7. DESKTOP READY:
-   - Desktop UI renderizado após sysLogin().
+```
+1. BootScreen monta → kernel.powerOn()
+2. kernel.powerOn():
+   - fsRepairSystemFiles()        → garante que bootmgr.exe está atualizado
+   - createProcess('bootmgr.exe') → cria processo
+   - executeBinary(bootmgr.exe)   → executa o script do bootmgr
+3. bootmgr.exe (script JS):
+   - Lê boot.ini, valida ARC path
+   - Carrega ntoskrnl.exe (verifica existência)
+   - Registra drivers (ntfs.sys, disk.sys, display.sys, hid.sys, netio.sys)
+   - OS.finalizeBoot()            → emite 'boot:finished'
+4. BootScreen recebe 'boot:finished':
+   - Exibe logo + spinner por 2s
+   - kernel.loadShell()
+5. kernel.loadShell():
+   - scanSystemApps()             → descobre e registra apps do System32
+   - createProcess('explorer.exe', 'dwm.exe', 'SearchHost.exe')
+   - bootPhase = 'DESKTOP_READY'
+6. BootScreen → setBootPhase('login') → LockScreen aparece
+7. Usuário faz login → kernel.sysLogin() → bootPhase = 'desktop'
 ```
 
-**Auto-Repair:** Se `bootmgr.exe` for corrompido ou deletado, o Kernel detecta a falha e dispara o **Sistema de Auto-Reparo**, que tenta restaurar os binários do sistema a partir de uma "shadow copy" íntegra.
+**Auto-Repair:** Se `bootmgr.exe` não for encontrado, o kernel chama `fsDeepReformat()` e tenta novamente antes de falhar.
 
 ---
 
-### Sistema de Arquivos Virtual (VFS)
+### Sistema de Arquivos Virtual
 
-O `Kernel` gerencia o VFS internamente com suporte a escrita direta em disco via **OPFS (Origin Private File System)**. Isso permite que arquivos criados ou modificados persistam mesmo se o cache do navegador for limpo.
+Estado gerido internamente pelo kernel, persistido no `localStorage` sob `obsidianos-filesystem-v2`. O Zustand store (`fileSystem.ts`) é apenas um mirror reativo.
 
-O Zustand store (`fileSystem.ts`) é apenas uma "vista" reativa que ouve os snapshots do Kernel.
+#### Tipos de nó
+
+```typescript
+{
+  id: string;           // Igual ao path
+  name: string;
+  type: 'file' | 'directory' | 'shortcut';
+  path: string;         // Separador \\
+  parentPath: string;
+  size: number;
+  extension?: string;
+  content?: string;
+  createdAt: number;
+  modifiedAt: number;
+  accessedAt: number;
+  permissions: FilePermissions;
+  attributes: FileAttributes;
+  metadata?: Record<string, string>;
+}
+```
 
 #### Tipos de executáveis
 
 | Tipo | `content` | Uso |
 |------|-----------|-----|
-| `makeSysExe` | String PE32+ | DLLs e arquivos internos de sistema |
-| `makeAppExe` | JSON Manifest | Apps React descobertos dinamicamente |
-| `makeBinaryExe` | Código JS | Scripts executáveis reais (ex: `ping.exe`) |
+| `makeSysExe` | String descritiva PE32+ | Arquivos de sistema (ntoskrnl, dlls) |
+| `makeAppExe` | JSON manifest com `appId`, `name`, `icon` | Apps descobertos pelo kernel |
+| `makeBinaryExe` | Código JavaScript | Executáveis reais (bootmgr.exe, ping.exe, etc.) |
 
 ---
 
@@ -270,19 +301,51 @@ Hives: `HKEY_LOCAL_MACHINE` · `HKEY_CURRENT_USER` · `HKEY_CLASSES_ROOT` · `HK
 
 ---
 
+### App Registry (`src/core/appRegistry.ts`)
+
+Começa vazio. Populado por `kernel.scanSystemApps()` durante o `loadShell()`, que varre `C:\ObsidianOS\System32` e `C:\Program Files\ObsidianOS Apps` procurando `.exe` com manifesto JSON (`type: "executable"`).
+
+Os componentes React são lazy-loaded estaticamente:
+
+| appId | Componente |
+|-------|-----------|
+| `terminal` | `apps/Terminal/Terminal` |
+| `notepad` | `apps/Notepad/Notepad` |
+| `calculator` | `apps/Calculator/Calculator` |
+| `file-explorer` | `apps/FileExplorer/FileExplorer` |
+| `settings` | `apps/Settings/Settings` |
+| `task-manager` | `apps/TaskManager/TaskManager` |
+| `browser` | `apps/Browser/Browser` |
+| `regedit` | `apps/Regedit/Regedit` |
+
+---
+
 ## 🖼️ Componentes da Interface
 
 ### Boot Screen
-Exibe logs de hardware em modo BIOS e o spinner gráfico clássico durante o carregamento do Shell.
+Modo texto (BIOS/drivers): fundo preto, fonte monospace, log ao vivo via `kernel.on('bootLog')`.
+Modo gráfico (shell init): logo 4 quadrados + spinner de 5 pontos.
 
 ### BSOD
-Fiel ao Windows 11. Barra de progresso do memory dump baseada na RAM real alocada pelo kernel. Gera arquivos `.DMP` em `C:\ObsidianOS\System32\Minidump\`.
+Fiel ao Windows 11. Barra de progresso do memory dump baseada na RAM real do kernel. Cria `.DMP` em `C:\ObsidianOS\System32\Minidump\`. Reinicia após 3s via `window.location.reload()`.
 
 ### Lock Screen
-Interface moderna com relógio dinâmico e transição fluida para login.
+Duas fases: relógio/data → campo de senha. Senha em branco = acesso direto.
 
-### Desktop & Taskbar
-Ambiente multitarefa completo. Suporte a atalhos de teclado (ex: `Ctrl+Shift+Esc`), wallpapers dinâmicos e área de notificações.
+### Desktop
+Ícones fixos com double-click para abrir. Menu de contexto com opções de exibição e novo arquivo. Só renderiza se `explorer.exe` estiver rodando.
+
+### Taskbar
+`[Iniciar] [Pesquisa]` · `[janelas abertas]` · `[WiFi] [Volume] [Bateria] [Relógio]`
+
+### Start Menu
+Busca em tempo real nos apps registrados. Seção "Fixados" (primeiros 6 apps). Context menu por app.
+
+### Window
+Title bar com drag, double-click para maximizar, right-click para context menu. 8 resize handles. Conteúdo envolto em `ProcessProvider` + `Suspense`.
+
+### Context Menu
+Global, singleton, gerenciado pelo `contextMenuStore`. Suporta separadores, items desabilitados e sub-menus.
 
 ---
 
@@ -291,36 +354,92 @@ Ambiente multitarefa completo. Suporte a atalhos de teclado (ex: `Ctrl+Shift+Esc
 | App | appId | Descrição |
 |-----|-------|-----------|
 | Terminal | `terminal` | 20+ comandos, histórico (↑↓), autocompletar (Tab) |
-| Explorador de Arquivos | `file-explorer` | Gerenciamento de arquivos e navegação real no VFS |
-| Gerenciador de Tarefas | `task-manager` | Gráficos de CPU/RAM e kills de processos reais |
-| Bloco de Notas | `notepad` | Editor de texto simples com integração ao VFS |
-| Calculadora | `calculator` | Aplicação matemática completa |
-| Navegador | `browser` | Navegador interno com suporte a sandbox |
-| Configurações | `settings` | Personalização de sistema, temas e hardware |
-| Editor do Registro | `regedit` | Interface visual para manipulação das Hives do SO |
-| SDK App Runner | `sdk-runner` | Ambiente para executar apps experimentais do SDK |
+| Explorador de Arquivos | `file-explorer` | Navegação, criação, renomeação, exclusão |
+| Gerenciador de Tarefas | `task-manager` | Gráficos CPU/RAM em tempo real, lista de processos |
+| Bloco de Notas | `notepad` | Editor de texto com save no filesystem virtual |
+| Calculadora | `calculator` | Operações básicas e avançadas |
+| Navegador | `browser` | Iframe com barra de endereço |
+| Configurações | `settings` | Tema, wallpaper, volume, rede |
+| Editor do Registro | `regedit` | Navegação e edição do registro do sistema |
+
+### Comandos do Terminal
+
+`help` · `dir`/`ls` · `cd` · `cls`/`clear` · `echo` · `type`/`cat` · `mkdir`/`md` · `touch` · `del`/`rm` · `rename` · `move` · `copy` · `tasklist` · `taskkill` · `ping` · `ipconfig` · `systeminfo` · `reg` · `regedit` · `calc` · `notepad` · `explorer` · `start` · `shutdown`/`reboot`
 
 ---
 
 ## 🔥 Mecânicas de Realismo
 
-### Corrupção de Sistema
-Deletar arquivos críticos como `gdi32.dll` ou `user32.dll` causa instabilidade visual e BSOD progressiva após alguns segundos.
+### BSOD por arquivos críticos deletados
+Deletar estes arquivos dispara BSOD automaticamente:
 
-### Gestão de Memória
-A RAM é alocada dinamicamente pelos processos. Se a alocação exceder o limite (8GB por padrão), o sistema dispara uma BSOD de `MEMORY_MANAGEMENT`.
+| Arquivo | Stop Code |
+|---------|-----------|
+| `gdi32.dll` | `WIN32K_CRITICAL_FAILURE` (com corrupção visual por 4s antes) |
+| `user32.dll` | `CLIENT_SERVER_RUNTIME_ISSUE` (sistema fica não-responsivo por 5s) |
 
-### Recovery Mode
-Se o sistema falhar consecutivamente por 3 vezes durante o boot, ele entra automaticamente em **Modo de Recuperação**, permitindo um `Format Disk` completo.
+### BSOD por processos críticos encerrados
+
+| Processo | Stop Code |
+|----------|-----------|
+| `System` | `CRITICAL_PROCESS_DIED` |
+| `csrss.exe` | `CRITICAL_PROCESS_DIED` |
+| `lsass.exe` | `CRITICAL_PROCESS_DIED` |
+| `dwm.exe` | `DESKTOP_WINDOW_MANAGER_DIED` |
+| `smss.exe`, `wininit.exe`, `services.exe` | `CRITICAL_PROCESS_DIED` |
+
+### Auto-Repair
+Se `bootmgr.exe` não for encontrado no boot, o kernel executa `fsDeepReformat()` e tenta restaurar antes de falhar com BSOD.
+
+### Monitoramento de recursos
+CPU calculada a partir da soma dos processos ativos + ruído orgânico. RAM alocada/liberada dinamicamente pelo kernel via `allocateMemory`/`freeMemory`. Overload de RAM dispara BSOD `MEMORY_MANAGEMENT`.
+
+### Atalhos de teclado
+`Ctrl+Shift+Esc` → Gerenciador de Tarefas
 
 ---
 
 ## 🔧 Como Adicionar um Novo Aplicativo
 
-1. **Crie o componente React** em `src/apps/MeuApp/`.
-2. **Registre o lazy import** em `appRegistry.ts`.
-3. **Adicione o executável** (Manifest JSON) em `defaultFileSystem.ts`.
-4. O Kernel fará o **App Discovery** automaticamente no próximo boot.
+**1. Crie o componente React:**
+```
+src/apps/MeuApp/MeuApp.tsx
+src/apps/MeuApp/MeuApp.css
+```
+
+O componente recebe `{ windowId: string }` como prop.
+
+**2. Registre o lazy import em `appRegistry.ts`:**
+```typescript
+const components: Record<string, any> = {
+  // ...existentes
+  'meu-app': lazy(() => import('../apps/MeuApp/MeuApp')),
+};
+```
+
+**3. Adicione o executável no `defaultFileSystem.ts`:**
+```typescript
+// Na array appExes:
+[
+  'C:\\ObsidianOS\\System32\\meuapp.exe',
+  'meuapp.exe',
+  'C:\\ObsidianOS\\System32',
+  'meu-app',        // appId
+  '🚀',             // icon
+  'utilities',      // category
+  'Meu Aplicativo'  // displayName
+],
+```
+
+O kernel vai descobrir o app automaticamente no próximo boot via `scanSystemApps()`.
+
+**4. (Opcional) Adicione ao Desktop em `Desktop.tsx`:**
+```typescript
+const defaultIcons: DesktopIconData[] = [
+  // ...existentes
+  { id: 'meu-app', name: 'Meu Aplicativo', icon: '🚀', appId: 'meu-app' },
+];
+```
 
 ---
 
@@ -330,5 +449,5 @@ Se o sistema falhar consecutivamente por 3 vezes durante o boot, ele entra autom
 npm run dev      # Servidor de desenvolvimento
 npm run build    # Build de produção (tsc + vite)
 npm run lint     # ESLint
-npm run preview  # Preview do build local
+npm run preview  # Preview do build
 ```
