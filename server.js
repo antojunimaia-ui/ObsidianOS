@@ -60,7 +60,7 @@ app.post('/api/v1/auth/login', (req, res) => {
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Lógica de SPA
-app.get('*', (req, res) => {
+app.get('/*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
