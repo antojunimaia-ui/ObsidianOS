@@ -59,8 +59,8 @@ app.post('/api/v1/auth/login', (req, res) => {
 // Servir os arquivos estáticos da pasta 'dist'
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Lógica de SPA
-app.get('/*', (req, res) => {
+// Lógica de SPA: Se não for uma rota de API ou arquivo estático, serve o index.html
+app.use((req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
