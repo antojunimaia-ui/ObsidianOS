@@ -1,6 +1,11 @@
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
+import express from 'express';
+import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const app = express();
 
 // Configurações
@@ -34,7 +39,6 @@ app.post('/api/v1/auth/login', (req, res) => {
   const { username, password } = req.body;
   
   // LOGICA DE DEMONSTRAÇÃO: Aceita qualquer usuário, e se a senha for vazia, loga direto.
-  // Em um sistema real, você consultaria um banco de dados aqui.
   console.log(`[Auth] Tentativa de login: ${username}`);
 
   res.json({
@@ -52,10 +56,10 @@ app.post('/api/v1/auth/login', (req, res) => {
 // SERVINDO O FRONTEND (SISTEMA OPERACIONAL)
 // ============================================
 
-// Servir os arquivos estáticos da pasta 'dist' (gerada pelo npm run build)
+// Servir os arquivos estáticos da pasta 'dist'
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Lógica de SPA: Qualquer rota que não seja API deve carregar o index.html do ObsidianOS
+// Lógica de SPA
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });

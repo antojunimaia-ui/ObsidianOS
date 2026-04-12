@@ -174,7 +174,7 @@ Proc.exit(0);
         ))}
       </div>
       <div className="obsidian-code-statusbar">
-        <span>PID: {pid} | {isRunning ? 'Rodando' : 'Pronto'}</span>
+        <span>PID: {pid} {runnerPid ? `| Sub-PID: ${runnerPid}` : ''} | {isRunning ? 'Rodando' : 'Pronto'}</span>
         <span>{filePath || 'Não Salvo (C:\\Users\\User\\Documents\\script.exe)'}</span>
       </div>
     </div>

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { useWindowManager } from '../../stores/windowManager';
-import { useProcess } from '../../contexts/ProcessContext';
 import kernel from '../../core/kernel';
 import './HwndRenderer.css';
 
