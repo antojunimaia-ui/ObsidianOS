@@ -3,10 +3,12 @@
 // ============================================
 import { useState, useEffect } from 'react';
 import { useSystem } from '../../stores/systemStore';
+import { useUserStore } from '../../stores/userStore';
 import './LockScreen.css';
 
 export default function LockScreen() {
-  const { bootPhase, currentUser, login } = useSystem();
+  const { bootPhase, unlock } = useSystem();
+  const { currentUser, login } = useUserStore();
   const [password, setPassword] = useState('');
   const [showPasswordField, setShowPasswordField] = useState(false);
   const [error, setError] = useState(false);
@@ -28,15 +30,17 @@ export default function LockScreen() {
     month: 'long',
   });
 
-  const handleUnlock = () => {
+  const handleUnlock = async () => {
     if (!showPasswordField) {
       setShowPasswordField(true);
       return;
     }
 
-    const success = login(password);
+    const currentUsername = currentUser?.username || 'Admin';
+    const success = await login(currentUsername, password);
     if (success) {
       setIsUnlocking(true);
+      setTimeout(() => unlock(), 800); // Trigger kernel unlock after animation
     } else {
       setError(true);
       setPassword('');
@@ -66,13 +70,17 @@ export default function LockScreen() {
         <div className="login-panel">
           <div className="login-avatar">
             <div className="avatar-circle">
-              <svg viewBox="0 0 24 24" fill="currentColor" width="48" height="48">
-                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-              </svg>
+              {currentUser?.avatar ? (
+                <img src={currentUser.avatar} alt="Avatar" width="72" height="72" style={{ borderRadius: '50%' }} />
+              ) : (
+                <svg viewBox="0 0 24 24" fill="currentColor" width="48" height="48">
+                  <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                </svg>
+              )}
             </div>
           </div>
           
-          <div className="login-username">{currentUser.displayName}</div>
+          <div className="login-username">{currentUser?.displayName || 'Obsidian User'}</div>
           
           <div className={`login-input-wrapper ${error ? 'error' : ''}`}>
             <input

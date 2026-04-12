@@ -262,12 +262,24 @@ if (!kernelCode) { OS.triggerBSOD({ stopCode: 'KERNEL_DATA_INPAGE_ERROR', techni
 OS.allocateMemory(64, 'ntoskrnl.exe');
 OS.createProcess('System', 'System Process', '⚙️');
 
-// 5. Load kernel32.dll — Base API
+// 5. Load kernel32.dll, gdi32.dll, user32.dll — Base API
 OS.addBootLog('BootMgr: Loading kernel32.dll...');
 const k32ok = OS.loadLibrary('C:\\\\ObsidianOS\\\\System32\\\\kernel32.dll');
 if (!k32ok) { OS.triggerBSOD({ stopCode: 'KERNEL32_INIT_FAILED', technicalInfo: 'kernel32.dll failed to load', failedComponent: 'kernel32.dll', bugCheckCode: '0x0000007B', parameters: ['kernel32.dll'] }); return; }
 OS.allocateMemory(12, 'kernel32.dll');
 OS.addBootLog('  ✓ kernel32.dll');
+
+OS.addBootLog('BootMgr: Loading gdi32.dll...');
+const gdi32ok = OS.loadLibrary('C:\\\\ObsidianOS\\\\System32\\\\gdi32.dll');
+if (!gdi32ok) { OS.triggerBSOD({ stopCode: 'GDI32_INIT_FAILED', technicalInfo: 'gdi32.dll failed to load', failedComponent: 'gdi32.dll', bugCheckCode: '0x0000007C', parameters: ['gdi32.dll'] }); return; }
+OS.allocateMemory(8, 'gdi32.dll');
+OS.addBootLog('  ✓ gdi32.dll');
+
+OS.addBootLog('BootMgr: Loading user32.dll...');
+const user32ok = OS.loadLibrary('C:\\\\ObsidianOS\\\\System32\\\\user32.dll');
+if (!user32ok) { OS.triggerBSOD({ stopCode: 'USER32_INIT_FAILED', technicalInfo: 'user32.dll failed to load', failedComponent: 'user32.dll', bugCheckCode: '0x0000007D', parameters: ['user32.dll'] }); return; }
+OS.allocateMemory(10, 'user32.dll');
+OS.addBootLog('  ✓ user32.dll');
 
 // 6. Load HAL
 OS.setBootPhase('HAL_INIT');
@@ -640,6 +652,78 @@ print("");
 print("Diagnostics complete.");
 Proc.exit(0);
     `.trim()
+  ],
+  [
+    'C:\\ObsidianOS\\SDK\\examples\\calc_gdi.exe',
+    'calc_gdi.exe',
+    'C:\\ObsidianOS\\SDK\\examples',
+    `
+// ===================================
+// GDI/USER32 Calculator 
+// ===================================
+
+// Inicializar interface inicial
+OS.User32.CreateLabel('display', '0', 20, 20, 260, 40);
+OS.User32.UpdateElementText('display', '<div style="font-size:24px; text-align:right; border:1px solid #000; padding:5px; background:#fff; border-radius:4px">0</div>');
+
+let currentVal = '0';
+let op = '';
+let lastVal = 0;
+
+function updateDisplay() {
+    OS.User32.UpdateElementText('display', '<div style="font-size:24px; text-align:right; border:1px solid #000; padding:5px; background:#fff; border-radius:4px">' + currentVal + '</div>');
+}
+
+function handleNum(n) {
+    if (currentVal === '0' || currentVal === 'Err') currentVal = n;
+    else currentVal += n;
+    updateDisplay();
+}
+
+function handleOp(o) {
+    lastVal = parseFloat(currentVal);
+    op = o;
+    currentVal = '0';
+    updateDisplay();
+}
+
+function handleEq() {
+    let result = 0;
+    let curr = parseFloat(currentVal);
+    if(op === '+') result = lastVal + curr;
+    if(op === '-') result = lastVal - curr;
+    if(op === '*') result = lastVal * curr;
+    if(op === '/') result = curr === 0 ? 'Err' : lastVal / curr;
+    currentVal = String(result);
+    op = '';
+    updateDisplay();
+}
+
+// Botões numéricos e de oepração
+let keys = [
+  ['7','8','9','/'],
+  ['4','5','6','*'],
+  ['1','2','3','-'],
+  ['0','C','=','+']
+];
+
+for(let r=0; r<4; r++) {
+   for(let c=0; c<4; c++) {
+      let k = keys[r][c];
+      let id = 'btn_' + k;
+      OS.User32.CreateButton(id, k, 20 + c*65, 80 + r*65, 60, 60);
+      OS.User32.OnMessage(id, 'click', function() {
+          if(k === 'C') { currentVal = '0'; lastVal = 0; op = ''; updateDisplay(); }
+          else if(k === '=') { handleEq(); }
+          else if(['+','-','*','/'].indexOf(k) !== -1) { handleOp(k); }
+          else { handleNum(k); }
+      });
+   }
+}
+
+// Rodar para sempre!
+await OS.User32.MessageLoop();
+    `.trim()
   ]
 ];
 
@@ -652,6 +736,8 @@ const appExes: [string, string, string, string, string, string, string][] = [
   ['C:\\Program Files\\ObsidianOS Apps\\taskmgr.exe', 'taskmgr.exe', 'C:\\Program Files\\ObsidianOS Apps', 'task-manager', '📊', 'system', 'Gerenciador de Tarefas'],
   ['C:\\Program Files\\ObsidianOS Apps\\msedge.exe', 'msedge.exe', 'C:\\Program Files\\ObsidianOS Apps', 'browser', '🌐', 'productivity', 'Navegador Web'],
   ['C:\\Program Files\\ObsidianOS Apps\\regedit.exe', 'regedit.exe', 'C:\\Program Files\\ObsidianOS Apps', 'regedit', '🧊', 'system', 'Editor do Registro'],
+  ['C:\\Program Files\\ObsidianOS Apps\\ocode.exe', 'ocode.exe', 'C:\\Program Files\\ObsidianOS Apps', 'obsidian-code', '⚡', 'productivity', 'Obsidian Code'],
+  ['C:\\Program Files\\ObsidianOS Apps\\obsrecord.exe', 'obsrecord.exe', 'C:\\Program Files\\ObsidianOS Apps', 'obs-record', '🎥', 'multimedia', 'ObS Record'],
 ];
 
 systemExes.forEach(([path, name, parent, desc]) => {
@@ -885,6 +971,134 @@ OS.Kernel32 = {
   FormatMessage: function(code) {
     var messages = { 0: 'The operation completed successfully.', 2: 'The system cannot find the file specified.', 5: 'Access is denied.', 8: 'Not enough memory resources.', 32: 'The process cannot access the file.', 87: 'The parameter is incorrect.' };
     return messages[code] || 'Unknown error code: ' + code;
+  }
+};
+`.trim()
+  ],
+  [
+    'C:\\ObsidianOS\\System32\\gdi32.dll',
+    'gdi32.dll',
+    'C:\\ObsidianOS\\System32',
+    `
+// ============================================
+// gdi32.dll — Graphics Device Interface
+// Attaches OS.GDI32 namespace to the sandbox
+// Emits drawing instructions to HwndRenderer
+// ============================================
+OS.GDI32 = {
+  internalQueue: [],
+  
+  // Buffers a draw command
+  __queue: function(op, args) {
+     this.internalQueue.push(Object.assign({ op: op }, args));
+  },
+  
+  // Flushes commands to the React canvas
+  Flush: function() {
+     if (this.internalQueue.length > 0) {
+        kernel.emit('gdi:draw', { pid: OS.pid, commands: this.internalQueue });
+        this.internalQueue = [];
+     }
+  },
+
+  SetFillStyle: function(color) { this.__queue('fillStyle', { color: color }); },
+  FillRect: function(x, y, w, h) { this.__queue('fillRect', { x: x, y: y, w: w, h: h }); },
+  ClearRect: function(x, y, w, h) { this.__queue('clearRect', { x: x, y: y, w: w, h: h }); },
+  SetFont: function(font) { this.__queue('font', { font: font }); },
+  DrawText: function(text, x, y) { this.__queue('fillText', { text: String(text), x: x, y: y }); }
+};
+`.trim()
+  ],
+  [
+    'C:\\ObsidianOS\\System32\\user32.dll',
+    'user32.dll',
+    'C:\\ObsidianOS\\System32',
+    `
+// ============================================
+// user32.dll — Window & UI Manager
+// Attaches OS.User32 namespace to the sandbox
+// ============================================
+OS.User32 = {
+  elements: [],
+  listeners: {},
+
+  // Switch display mode to DOM
+  SetRenderMode: function(mode) {
+    kernel.emit('user32:set_mode', { pid: OS.pid, mode: mode });
+  },
+
+  // Renders the virtual DOM tree
+  __renderDOM: function() {
+    var html = this.elements.map(function(el) {
+       var style = "position:absolute;left:" + el.x + "px;top:" + el.y + "px;";
+       if (el.width) style += "width:" + el.width + "px;";
+       if (el.height) style += "height:" + el.height + "px;";
+       
+       if (el.type === 'button') {
+          return "<button id='" + el.id + "' style='" + style + "'>" + el.text + "</button>";
+       } else if (el.type === 'input') {
+          return "<input id='" + el.id + "' style='" + style + "' value='" + (el.text || '') + "' />";
+       } else if (el.type === 'label') {
+          return "<div id='" + el.id + "' style='" + style + "'>" + el.text + "</div>";
+       }
+       return "";
+    }).join("");
+    kernel.emit('user32:dom_update', { pid: OS.pid, html: html });
+  },
+
+  CreateElement: function(type, id, x, y, width, height, text) {
+    // If it exists, update it
+    var existing = this.elements.findIndex(function(e) { return e.id === id; });
+    var obj = { type: type, id: id, x: x, y: y, width: width, height: height, text: text };
+    if (existing >= 0) this.elements[existing] = obj;
+    else this.elements.push(obj);
+    
+    this.__renderDOM();
+  },
+
+  UpdateElementText: function(id, text) {
+    var existing = this.elements.find(function(e) { return e.id === id; });
+    if (existing) {
+       existing.text = text;
+       this.__renderDOM();
+    }
+  },
+
+  CreateButton: function(id, text, x, y, width, height) {
+    this.CreateElement('button', id, x, y, width, height, text);
+  },
+
+  CreateLabel: function(id, text, x, y, width, height) {
+    this.CreateElement('label', id, x, y, width, height, text);
+  },
+
+  CreateInput: function(id, text, x, y, width, height) {
+    this.CreateElement('input', id, x, y, width, height, text);
+  },
+
+  OnMessage: function(id, eventType, callback) {
+    if (!this.listeners[id]) this.listeners[id] = {};
+    this.listeners[id][eventType.toLowerCase()] = callback;
+  },
+
+  // The Message Loop that listens to events from HwndRenderer
+  MessageLoop: async function() {
+    this.SetRenderMode('dom');
+    this.__renderDOM();
+    
+    // Register global listener for DOM events from HwndRenderer
+    kernel.on('user32:dom_event', function(data) {
+       if (data.pid === OS.pid) {
+          if (OS.User32.listeners[data.elementId] && OS.User32.listeners[data.elementId][data.event]) {
+             OS.User32.listeners[data.elementId][data.event](data);
+          }
+       }
+    });
+
+    // Run indefinitely (until process terminated)
+    while (true) {
+       await OS.wait(100);
+    }
   }
 };
 `.trim()

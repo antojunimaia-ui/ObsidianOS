@@ -67,5 +67,10 @@ export const defaultRegistry: Record<string, Record<string, RegistryEntry>> = {
     ContentType: { type: 'REG_SZ', value: 'application/javascript' },
     DefaultApp: { type: 'REG_SZ', value: 'notepad' },
   },
+  'HKEY_LOCAL_MACHINE\\SYSTEM\\LiveMode': {
+    ApiUrl: { type: 'REG_SZ', value: '' },
+    CloudSyncEnabled: { type: 'REG_DWORD', value: 1 },
+    LastSync: { type: 'REG_SZ', value: '' },
+  },
 };
 

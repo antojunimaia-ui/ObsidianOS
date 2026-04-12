@@ -36,10 +36,8 @@ export default function BootScreen() {
       setShowLogo(true);
       // Let user see the logo for a bit
       await new Promise(r => setTimeout(r, 2000));
-      // Load shell
+      // Load shell (Kernel will emit the correct next boot phase: setup or login)
       await kernel.loadShell();
-      // Ready for login
-      setBootPhase('login');
     };
 
     const runBoot = async () => {

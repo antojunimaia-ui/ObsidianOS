@@ -9,7 +9,7 @@ import { create } from 'zustand';
 import kernel from '../core/kernel';
 import type { SystemTheme, UserProfile, NotificationData } from '../types';
 
-type BootPhase = 'off' | 'bios' | 'loading' | 'login' | 'desktop';
+type BootPhase = 'off' | 'bios' | 'loading' | 'setup' | 'login' | 'desktop';
 
 interface SystemState {
   bootPhase: BootPhase;

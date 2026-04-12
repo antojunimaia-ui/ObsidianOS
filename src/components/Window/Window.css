@@ -36,7 +36,21 @@
   box-shadow: var(--shadow-xl);
 }
 
-.window:not(.active) {
+.window.frameless {
+  border-radius: 0;
+  border: none;
+  box-shadow: none !important;
+  background: transparent;
+  animation: none;
+  pointer-events: none; /* Let clicks pass through if needed, but the content will re-enable them */
+}
+
+.window.frameless .window-content {
+  background: transparent;
+  pointer-events: all;
+}
+
+.window:not(.active):not(.frameless) {
   opacity: 0.92;
 }
 

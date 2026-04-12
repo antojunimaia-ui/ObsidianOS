@@ -25,10 +25,13 @@ const defaultIcons: DesktopIconData[] = [
   { id: 'notepad', name: 'Bloco de Notas', icon: '📝', appId: 'notepad' },
   { id: 'browser', name: 'Navegador', icon: '🌐', appId: 'browser' },
   { id: 'settings', name: 'Configurações', icon: '⚙️', appId: 'settings' },
+  { id: 'obsidian-code', name: 'Obsidian Code', icon: '⚡', appId: 'obsidian-code' },
+  { id: 'obs-record', name: 'ObS Record', icon: '🎥', appId: 'obs-record' },
+  { id: 'calc-gdi', name: 'Calculadora GDI', icon: '🧮', appId: 'sdk:calc_gdi.exe' },
 ];
 
 export default function Desktop() {
-  const { bootPhase, closeStartMenu, theme } = useSystem();
+  const { closeStartMenu, theme } = useSystem();
   const openWindow = useWindowManager(s => s.openWindow);
   const createProcess = useProcessManager(s => s.createProcess);
   const { openContextMenu } = useContextMenuStore();
@@ -106,7 +109,8 @@ export default function Desktop() {
     closeStartMenu();
   }, [closeStartMenu]);
 
-  if (bootPhase !== 'desktop') return null;
+  // If we are in desktop phase, the window manager will render this component
+  // We no longer need the bootPhase check here as the window itself is managed by the shell boot logic.
 
   const currentWallpaper = (theme.wallpaper && theme.wallpaper !== 'default') 
     ? (theme.wallpaper.startsWith('/') || theme.wallpaper.startsWith('http') ? theme.wallpaper : `/Wallpapers/${theme.wallpaper}`) 

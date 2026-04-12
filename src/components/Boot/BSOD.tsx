@@ -1,7 +1,4 @@
-// ============================================
-// Blue Screen of Death (BSOD)
-// ============================================
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useFileSystem } from '../../stores/fileSystem';
 import kernel, { type BSODInfo } from '../../core/kernel';
 import './BSOD.css';
@@ -11,8 +8,8 @@ interface BSODProps {
 }
 
 export default function BSOD({ info }: BSODProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [progress, setProgress] = useState(0);
-  const [dumpDone, setDumpDone] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -39,11 +36,9 @@ export default function BSOD({ info }: BSODProps) {
       if (dumped >= totalMemoryMB) {
         setProgress(100);
         fs.createFile(dumpDir, dumpFile, dumpContent, 'DMP');
-        // Increment crash counter
         const prev = parseInt(localStorage.getItem('obsidianos_crash_count') ?? '0', 10);
         localStorage.setItem('obsidianos_crash_count', String(prev + 1));
         if (isMounted) {
-          setDumpDone(true);
           setTimeout(() => window.location.reload(), 3000);
         }
       } else {
@@ -56,42 +51,86 @@ export default function BSOD({ info }: BSODProps) {
     return () => { isMounted = false; };
   }, [info]);
 
+  // GDI Canvas Renderer loop
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Handle screen resize
+    const resize = () => {
+       canvas.width = window.innerWidth;
+       canvas.height = window.innerHeight;
+       draw();
+    };
+    window.addEventListener('resize', resize);
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    const draw = () => {
+       // Solid Blue Screen Fill (GDI Style)
+       ctx.fillStyle = '#0078D7';
+       ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+       // Text Settings
+       ctx.fillStyle = '#ffffff';
+       
+       // Face
+       ctx.font = '120px "Segoe UI", Arial, sans-serif';
+       ctx.fillText(':(', canvas.width * 0.15, canvas.height * 0.3);
+
+       // Main Error Text
+       ctx.font = '32px "Segoe UI", Arial, sans-serif';
+       ctx.fillText('Seu componente ObsidianOS encontrou um problema e', canvas.width * 0.15, canvas.height * 0.45);
+       ctx.fillText('precisa ser reiniciado.', canvas.width * 0.15, canvas.height * 0.5);
+
+       ctx.font = '24px "Segoe UI", Arial, sans-serif';
+       ctx.fillText('Estamos coletando algumas informações sobre o erro e, em seguida,', canvas.width * 0.15, canvas.height * 0.6);
+       ctx.fillText('reiniciaremos para você.', canvas.width * 0.15, canvas.height * 0.64);
+       
+       ctx.font = '28px "Segoe UI", Arial, sans-serif';
+       ctx.fillText(`${progress}% concluído`, canvas.width * 0.15, canvas.height * 0.72);
+
+       // Technical Box
+       ctx.font = '16px "Segoe UI", Consolas, monospace';
+       const startY = canvas.height * 0.82;
+       ctx.fillText('*** TECHNICAL INFORMATION ***', canvas.width * 0.15, startY);
+       ctx.fillText(`STOP_CODE: ${info.stopCode || 'CRITICAL_PROCESS_DIED'}`, canvas.width * 0.15, startY + 25);
+       ctx.fillText(`FAILED_COMPONENT: ${info.failedComponent || 'Unknown System Component'}`, canvas.width * 0.15, startY + 50);
+       ctx.fillText(`BUG CHECK CODE: ${info.bugCheckCode || '0x00000000'}`, canvas.width * 0.15, startY + 75);
+       ctx.fillText(`PARAMETERS: ${info.parameters?.join(', ') || '0x0, 0x0, 0x0, 0x0'}`, canvas.width * 0.15, startY + 100);
+
+       // Draw a fake QR code square (GDI rectangles)
+       const qrRootX = canvas.width * 0.15 + 600;
+       const qrRootY = startY;
+       ctx.fillStyle = '#ffffff';
+       ctx.fillRect(qrRootX, qrRootY, 110, 110);
+       ctx.fillStyle = '#0078D7';
+       ctx.fillRect(qrRootX + 10, qrRootY + 10, 30, 30);
+       ctx.fillRect(qrRootX + 70, qrRootY + 10, 30, 30);
+       ctx.fillRect(qrRootX + 10, qrRootY + 70, 30, 30);
+       
+       ctx.fillStyle = '#ffffff';
+       ctx.font = '14px "Segoe UI", Arial, sans-serif';
+       ctx.fillText('Para obter mais informações,', qrRootX + 140, qrRootY + 20);
+       ctx.fillText('visite: obsidianos.org/stopcode', qrRootX + 140, qrRootY + 40);
+    };
+
+    draw();
+
+    // Re-draw periodically to update progress
+    const interval = setInterval(draw, 100);
+    
+    return () => {
+       window.removeEventListener('resize', resize);
+       clearInterval(interval);
+    };
+  }, [info, progress]);
+
   return (
-    <div className="bsod-container">
-      <div className="bsod-content">
-        <div className="bsod-face">:(</div>
-        <h1>Seu componente ObsidianOS encontrou um problema e precisa ser reiniciado.</h1>
-        <p className="bsod-collecting">
-          Estamos coletando algumas informações sobre o erro e, em seguida, reiniciaremos para você.
-        </p>
-        <p className="bsod-progress">{progress}% concluído</p>
-
-
-
-        <div className="bsod-details-box">
-          <div className="bsod-qr">
-            <svg viewBox="0 0 100 100" fill="white">
-              <rect width="100" height="100" fill="transparent" stroke="white" strokeWidth="1" />
-              <path d="M10 10 h30 v30 h-30 z M20 20 h10 v10 h-10 z M60 10 h30 v30 h-30 z M70 20 h10 v10 h-10 z M10 60 h30 v30 h-30 z M20 70 h10 v10 h-10 z" />
-              <path d="M50 10 h10 v10 h-10 z M50 30 h10 v10 h-10 z M10 50 h10 v10 h-10 z M30 50 h10 v10 h-10 z M50 50 h10 v10 h-10 z M70 50 h10 v10 h-10 z M90 50 h10 v10 h-10 z M50 70 h10 v10 h-10 z M70 70 h10 v10 h-10 z M90 70 h20 v20 h-20 z" />
-            </svg>
-          </div>
-          <div className="bsod-text-details">
-            <p>Para obter mais informações sobre esse problema e correções possíveis, visite<br/>https://www.obsidianos.org/stopcode</p>
-            <br/>
-            <p>Se você ligar para o suporte, forneça as seguintes informações:</p>
-            <p className="bsod-stopcode">Código de parada: {info.stopCode || 'CRITICAL_PROCESS_DIED'}</p>
-            <p className="bsod-failed">O que falhou: {info.failedComponent || 'Unknown System Component'}</p>
-          </div>
-        </div>
-
-        <div className="bsod-tech-inner">
-          <p>*** TECHNICAL INFORMATION ***</p>
-          <p>BUG CHECK CODE: {info.bugCheckCode || '0x00000000'}</p>
-          <p>PARAMETERS: {info.parameters?.join(', ') || '0x0, 0x0, 0x0, 0x0'}</p>
-          <p>INFO: {info.technicalInfo || 'No technical information available.'}</p>
-        </div>
-      </div>
+    <div className="bsod-container" style={{ margin: 0, padding: 0, overflow: 'hidden' }}>
+      <canvas ref={canvasRef} style={{ display: 'block', width: '100vw', height: '100vh', cursor: 'none' }} />
     </div>
   );
 }

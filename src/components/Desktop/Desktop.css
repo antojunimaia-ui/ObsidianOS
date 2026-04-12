@@ -3,13 +3,11 @@
 /* ============================================ */
 
 .desktop {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-desktop);
+  width: 100%;
+  height: 100%;
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  padding-bottom: var(--taskbar-height);
 }
 
 /* Desktop Icons Grid */
@@ -20,7 +18,7 @@
   align-content: flex-start;
   gap: 4px;
   padding: 12px;
-  height: calc(100vh - var(--taskbar-height));
+  height: 100%;
 }
 
 .desktop-icon {

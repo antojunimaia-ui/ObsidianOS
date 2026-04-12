@@ -200,9 +200,13 @@ export default function StartMenu() {
         <div className="start-bottom">
           <button className="start-user-btn">
             <div className="start-user-avatar">
-              <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
-                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-              </svg>
+              {currentUser?.avatar ? (
+                <img src={currentUser.avatar} alt="Avatar" width="32" height="32" style={{ borderRadius: '50%' }} />
+              ) : (
+                <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+                  <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                </svg>
+              )}
             </div>
             <span className="start-user-name">{currentUser.displayName}</span>
           </button>

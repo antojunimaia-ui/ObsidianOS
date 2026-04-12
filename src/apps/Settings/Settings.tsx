@@ -18,7 +18,7 @@ const sections = [
   { id: 'about', label: 'Sobre', icon: 'ℹ️' },
 ];
 
-export default function SettingsApp({}: { windowId: string }) {
+export default function SettingsApp({ }: { windowId: string }) {
   const [activeSection, setActiveSection] = useState('personalization');
   const { theme, setTheme, currentUser, volume, setVolume, brightness, setBrightness } = useSystem();
   const { getValue } = useRegistry();
@@ -34,7 +34,7 @@ export default function SettingsApp({}: { windowId: string }) {
         return (
           <div className="settings-content-inner">
             <h2>Personalização</h2>
-            
+
             <div className="settings-card">
               <h3>Tema</h3>
               <div className="settings-theme-selector">
@@ -75,28 +75,28 @@ export default function SettingsApp({}: { windowId: string }) {
             <div className="settings-card">
               <h3>Plano de Fundo</h3>
               <div className="settings-wallpaper-grid">
-                <button 
+                <button
                   className={`wallpaper-option ${(!theme.wallpaper || theme.wallpaper === 'default') ? 'active' : ''}`}
                   onClick={() => setTheme({ wallpaper: 'default' })}
                 >
                   <div className="wallpaper-thumb" style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)' }} />
                   <span className="wallpaper-label">Padrão</span>
                 </button>
-                <button 
+                <button
                   className={`wallpaper-option ${theme.wallpaper === 'abstract.png' ? 'active' : ''}`}
                   onClick={() => setTheme({ wallpaper: 'abstract.png' })}
                 >
                   <div className="wallpaper-thumb" style={{ backgroundImage: 'url(/Wallpapers/abstract.png)' }} />
                   <span className="wallpaper-label">Abstrato</span>
                 </button>
-                <button 
+                <button
                   className={`wallpaper-option ${theme.wallpaper === 'nature.png' ? 'active' : ''}`}
                   onClick={() => setTheme({ wallpaper: 'nature.png' })}
                 >
                   <div className="wallpaper-thumb" style={{ backgroundImage: 'url(/Wallpapers/nature.png)' }} />
                   <span className="wallpaper-label">Natureza</span>
                 </button>
-                <button 
+                <button
                   className={`wallpaper-option ${theme.wallpaper === 'city.png' ? 'active' : ''}`}
                   onClick={() => setTheme({ wallpaper: 'city.png' })}
                 >
@@ -158,6 +158,32 @@ export default function SettingsApp({}: { windowId: string }) {
                 <span>{brightness}%</span>
               </div>
             </div>
+            <div className="settings-card">
+              <h3>Recuperação do Sistema</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <span style={{ fontWeight: 'bold' }}>Restaurar o PC</span>
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Atenção: A formatação apaga todo seu Disco Local virtual (OPFS) de forma irrecuperável.</span>
+                </div>
+                <button
+                  style={{ background: '#b91c1c', color: 'white', padding: '8px 16px', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                  onClick={() => {
+                    if (window.confirm('ATENÇÃO: TEM CERTEZA ABSOLUTA? Isso irá limpar seu disco virtual (OPFS) e dados da página, reinstalando o sistema operacional ObsidianOS do zero.')) {
+                      navigator.storage.getDirectory().then(async d => {
+                        for await (const [n] of (d as any).entries()) {
+                          await d.removeEntry(n, { recursive: true });
+                        }
+                      }).catch(e => console.error(e)).finally(() => {
+                        localStorage.clear();
+                        window.location.reload();
+                      });
+                    }
+                  }}
+                >
+                  Formatar Sistema
+                </button>
+              </div>
+            </div>
           </div>
         );
 
@@ -168,10 +194,10 @@ export default function SettingsApp({}: { windowId: string }) {
             <div className="settings-card about-card">
               <div className="about-logo">
                 <svg width="64" height="64" viewBox="0 0 88 88" fill="none">
-                  <rect x="2" y="2" width="38" height="38" rx="4" fill="var(--accent)" opacity="0.9"/>
-                  <rect x="48" y="2" width="38" height="38" rx="4" fill="var(--accent)" opacity="0.7"/>
-                  <rect x="2" y="48" width="38" height="38" rx="4" fill="var(--accent)" opacity="0.7"/>
-                  <rect x="48" y="48" width="38" height="38" rx="4" fill="var(--accent)" opacity="0.5"/>
+                  <rect x="2" y="2" width="38" height="38" rx="4" fill="var(--accent)" opacity="0.9" />
+                  <rect x="48" y="2" width="38" height="38" rx="4" fill="var(--accent)" opacity="0.7" />
+                  <rect x="2" y="48" width="38" height="38" rx="4" fill="var(--accent)" opacity="0.7" />
+                  <rect x="48" y="48" width="38" height="38" rx="4" fill="var(--accent)" opacity="0.5" />
                 </svg>
               </div>
               <div className="about-info">
@@ -207,7 +233,7 @@ export default function SettingsApp({}: { windowId: string }) {
           <div className="settings-user-info">
             <div className="settings-avatar">
               <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
-                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
               </svg>
             </div>
             <span>{currentUser.displayName}</span>

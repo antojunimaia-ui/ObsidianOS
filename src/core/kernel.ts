@@ -76,6 +76,7 @@ export type BootPhase =
   | 'SESSION_MANAGER'   // Session Manager (smss.exe)
   | 'WINLOGON'          // Login subsystem
   | 'SHELL_INIT'        // Loading explorer.exe (shell)
+  | 'OOBE'              // Out-Of-Box Experience (Initial Setup)
   | 'DESKTOP_READY'     // Desktop environment ready
   | 'BOOT_FAILURE'      // Critical failure during boot
   | 'BSOD';             // Blue Screen of Death
@@ -175,7 +176,7 @@ class Kernel {
       } else {
         // No OPFS disk yet — use defaultNodes and repair system files
         // (first boot, or browser without OPFS support)
-        this.fsRepairSystemFiles();
+        this.fsDeepReformat();
       }
 
       this._isBootFinished = false; // Fresh start
@@ -301,7 +302,14 @@ class Kernel {
       this._resources.usedMemory += 48;
     }
 
-    this.bootPhase = 'DESKTOP_READY';
+    // Check if we need OOBE (Initial Setup)
+    const setupCompleted = localStorage.getItem('obsidianos-setup-completed') === 'true';
+    
+    if (!setupCompleted) {
+      this.bootPhase = 'OOBE';
+    } else {
+      this.bootPhase = 'WINLOGON';
+    }
     this.log('INFO', 'Kernel', 'Desktop environment ready');
     return true;
   }
@@ -536,6 +544,7 @@ class Kernel {
       'DRIVER_LOAD': 'loading',
       'SERVICE_INIT': 'loading',
       'SHELL_INIT': 'loading',
+      'OOBE': 'setup',
       'WINLOGON': 'login',
       'BOOT_FAILURE': 'bios'
       // NOTE: DESKTOP_READY is intentionally omitted — the transition to 'desktop'
@@ -1009,6 +1018,9 @@ class Kernel {
       triggerBSOD: (i: any) => this.triggerBSOD(i),
       finalizeBoot: () => this.finalizeBoot(),
       
+      // --- DRIVER MGMT ---
+      loadDriverAsync: (path: string) => this.loadDriverAsync(path),
+      
       // --- SYSTEM MGMT ---
       allocateMemory: (s: number, n: string) => this.allocateMemory(s, n),
       createProcess: (n: string, t: string, i: string) => this.createProcess(n, t, i),
@@ -1021,58 +1033,260 @@ class Kernel {
 
       // --- LIBRARY LOADER ---
       loadLibrary: (dllPath: string): boolean => {
-        const dllNode = this.fsGetNode(dllPath);
-        if (!dllNode || !dllNode.content) {
-          this.log('ERROR', 'ExecutionEngine', `LoadLibrary failed: ${dllPath} not found`);
-          return false;
-        }
-        try {
-          const dllFn = new Function('OS', 'kernel', `"use strict";\n${dllNode.content}`);
-          dllFn(OS, this);
-          this.log('INFO', 'ExecutionEngine', `Loaded library: ${dllPath}`);
-          return true;
-        } catch (e: any) {
-          this.log('ERROR', 'ExecutionEngine', `LoadLibrary error in ${dllPath}: ${e.message}`);
-          return false;
-        }
-      },
-
-      // --- DRIVER LOADER (async) ---
-      loadDriverAsync: (driverPath: string): Promise<boolean> => {
-        return this.loadDriverAsync(driverPath);
-      },
+         // This is used for early boot mgr only, in real processes we load via worker
+         const dllNode = this.fsGetNode(dllPath);
+         if (!dllNode || !dllNode.content) return false;
+         const dllFn = new Function('OS', 'kernel', `"use strict";\n${dllNode.content}`);
+         dllFn(OS, this);
+         return true;
+      }
     } as Record<string, any>;
 
+    // ─── RING PRIVILEGE CHECK ───
+    // Critical system processes (Kernel, Boot Manager, Shell) need Ring 0 access 
+    // to initialize the hardware and manage windows directly.
+    const systemFolder = path.includes('System32');
+    const ring0Binaries = [
+       'bootmgr.exe', 'ntoskrnl.exe', 'csrss.exe', 'smss.exe', 
+       'winlogon.exe', 'services.exe', 'lsass.exe', 'explorer.exe',
+       'dwm.exe'
+    ];
+    const isSystemProcess = systemFolder && ring0Binaries.some(bin => path.endsWith(bin));
+
+    if (isSystemProcess) {
+      this.log('INFO', 'ExecutionEngine', `Spawning System Process ${node.name} in Ring 0 (Privileged)`);
+      try {
+         const sdkNode = this.fsGetNode('C:\\ObsidianOS\\SDK\\lib\\obsidian.js');
+         const sdkCode = sdkNode?.content || '';
+         // Auto-Link DLLs for Kernel local processes
+         OS.loadLibrary('C:\\ObsidianOS\\System32\\kernel32.dll');
+         OS.loadLibrary('C:\\ObsidianOS\\System32\\gdi32.dll');
+         OS.loadLibrary('C:\\ObsidianOS\\System32\\user32.dll');
+
+         const scriptBody = `"use strict";\n${sdkCode};\n(async () => {\n${node.content}\n})().catch(e => {\n  kernel.log('ERROR', 'ExecutionEngine', 'System Process Error: ' + e.message);\n  kernel.triggerBSOD({ stopCode: 'CRITICAL_PROCESS_DIED', technicalInfo: e.message });\n});`;
+         const binaryScript = new Function('OS', 'kernel', scriptBody);
+         binaryScript(OS, this);
+         return; 
+      } catch (e: any) {
+         this.log('ERROR', 'ExecutionEngine', `System Process ${node.name} failed: ${e.message}`);
+         this.terminateProcess(pid);
+         return;
+      }
+    }
+
     try {
-      // Auto-Linker: Prepends the SDK library if it exists
+      // ─── OBSIDIANOS WORKER ARCHITECTURE ───
+      // We wrap the process into a dedicated hardware thread (Web Worker)
+      const workerBlob = new Blob([`
+        "use strict";
+        let OS = {};
+        let __callHandlers = new Map();
+
+        // The SYSCALL Bridge
+        function syscall(name, ...args) {
+           return new Promise((resolve) => {
+              const callId = Math.random().toString(36).substring(7);
+              __callHandlers.set(callId, resolve);
+              self.postMessage({ type: 'SYSCALL', name, args, callId });
+           });
+        }
+
+        // Initialize OS object with Proxies to the Kernel
+        self.onmessage = async (e) => {
+           const { type, data, callId } = e.data;
+           
+           if (type === 'BOOT') {
+              const { pid, name, code, sdkCode, dlls } = data;
+              self.pid = pid;
+              
+              // Internal performance monitor
+              self.onmessage_original = self.onmessage;
+              self.onmessage = async (e) => {
+                 if(e.data.type === 'PING') {
+                    self.postMessage({ type: 'PONG', callId: e.data.callId });
+                    return;
+                 }
+                 if(self.onmessage_original) self.onmessage_original(e);
+              };
+
+              // Base OS API
+              OS = {
+                 pid: pid,
+                 print: (m) => syscall('print', m),
+                 error: (m) => syscall('error', m),
+                 terminate: (c) => syscall('terminate', c),
+                 readFile: (p) => syscall('readFile', p),
+                 writeFile: (p,c) => syscall('writeFile', p, c),
+                 listFiles: (p) => syscall('listFiles', p),
+                 getEnv: (k) => syscall('getEnv', k),
+                 wait: (m) => new Promise(r => setTimeout(r, m)),
+                 getResources: () => syscall('getResources'),
+                 loadLibrary: async (p) => {
+                    const content = await syscall('readFile', p);
+                    if (!content) return false;
+                    try {
+                       const fn = new Function('OS', 'kernel', content);
+                       fn(OS, { emit: (name, data) => self.postMessage({ type: 'EMIT', name, data: Object.assign({ pid: self.pid }, data) }) });
+                       return true;
+                    } catch(e) { return false; }
+                 }
+              };
+
+              // Export to global scope
+              self.OS = OS;
+              self.kernel = { 
+                 emit: (name, d) => self.postMessage({ type: 'EMIT', name, data: Object.assign({ pid: self.pid }, d) }),
+                 on: (name, cb) => {
+                     // We need a way to receive events back in worker
+                     if(!self.__listeners) self.__listeners = {};
+                     if(!self.__listeners[name]) self.__listeners[name] = [];
+                     self.__listeners[name].push(cb);
+                 }
+              };
+
+              // Inject SDK
+              if(sdkCode) {
+                 try { new Function('OS', 'kernel', sdkCode)(OS, self.kernel); } catch(e){}
+              }
+
+              // Auto-load DLLs
+              for(const dllPath of dlls) {
+                 await OS.loadLibrary(dllPath);
+              }
+
+              // EXECUTE BINARY
+              try {
+                 const binaryFn = new Function('OS', 'kernel', 'return (async () => { ' + code + ' })();');
+                 await binaryFn(OS, self.kernel);
+              } catch(err) {
+                 OS.error("Runtime Error in Worker: " + err.message);
+                 OS.terminate(1);
+              }
+           }
+
+           if (type === 'SYSCALL_RES') {
+              const handler = __callHandlers.get(callId);
+              if (handler) {
+                 handler(data);
+                 __callHandlers.delete(callId);
+              }
+           }
+
+           if (type === 'EVENT') {
+              if (self.__listeners && self.__listeners[data.name]) {
+                 self.__listeners[data.name].forEach(cb => cb(data.data));
+              }
+           }
+        };
+      `], { type: 'application/javascript' });
+
+      const worker = new Worker(URL.createObjectURL(workerBlob));
+      
+      // Update process info with the worker instance
+      const procInfo = this._processes.get(pid);
+      if (procInfo) {
+         (procInfo as any).worker = worker;
+      }
+
+      // Handle messages from the isolated Worker
+      worker.onmessage = async (e) => {
+         const { type, name, args, callId, data } = e.data;
+
+         if (type === 'SYSCALL') {
+            let result = null;
+            // Map worker syscalls to Kernel methods
+            if (name === 'print') this.log('INFO', `Proc:${pid}`, args[0]);
+            if (name === 'error') this.log('ERROR', `Proc:${pid}`, args[0]);
+            if (name === 'terminate') this.terminateProcess(pid);
+            if (name === 'readFile') result = this.fsGetNode(args[0])?.content;
+            if (name === 'writeFile') this.fsUpdateFileContent(args[0], args[1]);
+            if (name === 'listFiles') result = this.fsGetChildren(args[0]).map(n => n.name);
+            if (name === 'getEnv') result = { OS: 'ObsidianOS_NT', USER: this._user.username }[args[0] as string];
+            if (name === 'getResources') result = { ...this._resources };
+
+            worker.postMessage({ type: 'SYSCALL_RES', callId, data: result });
+         }
+
+         if (type === 'EMIT') {
+             // Forward events from process to kernel bus (GDI, etc)
+             this.emit(name, data);
+         }
+      };
+
+      // Handle worker errors
+      worker.onerror = (err) => {
+         this.log('ERROR', 'ExecutionEngine', `Worker Thread Error (PID:${pid}): ${err.message}`);
+         this.terminateProcess(pid);
+      };
+
+      // Prepare environment
       const sdkNode = this.fsGetNode('C:\\ObsidianOS\\SDK\\lib\\obsidian.js');
       const sdkCode = sdkNode?.content || '';
+      const dlls = [
+         'C:\\ObsidianOS\\System32\\kernel32.dll',
+         'C:\\ObsidianOS\\System32\\gdi32.dll',
+         'C:\\ObsidianOS\\System32\\user32.dll'
+      ];
 
-      // THE SANDBOX: Using Function constructor to create a scope
-      let scriptBody = '"use strict";\n';
-      scriptBody += sdkCode + ';\n';
-      scriptBody += '// ------------------\n';
-      scriptBody += 'return (async () => {\n';
-      scriptBody += '  try {\n';
-      scriptBody += (node.content || "") + '\n';
-      scriptBody += '  } catch (e) {\n';
-      scriptBody += '    OS.addBootLog("Runtime Error: " + e.message);\n';
-      scriptBody += '    OS.error("Runtime Error: " + e.message);\n';
-      scriptBody += '    OS.terminate(1);\n';
-      scriptBody += '  }\n';
-      scriptBody += '})();';
+      // START THE PROCESS ENGINE
+      worker.postMessage({
+         type: 'BOOT',
+         data: {
+            pid,
+            name: node.name,
+            code: node.content || "",
+            sdkCode,
+            dlls
+         }
+      });
 
-      let binaryScript;
-      try {
-        binaryScript = new Function('OS', 'kernel', scriptBody);
-        binaryScript(OS, this);
-      } catch (err: any) {
-        this.log('ERROR', 'ExecutionEngine', `Execution Failed for ${path}: ${err.message}`);
-        this.addBootLog(`ERROR: Binary Execution Fail: ${path}`);
-        this.addBootLog(`Reason: ${err.message}`);
-        this.terminateProcess(pid);
-      }
+      // --- CPU MONITORING ENGINE ---
+      const monitorInterval = setInterval(() => {
+          if (!worker) return;
+          const start = performance.now();
+          const callId = Math.random().toString(36).substring(7);
+          
+          const pongHandler = (e: MessageEvent) => {
+              if (e.data.type === 'PONG' && e.data.callId === callId) {
+                  const latency = performance.now() - start;
+                  // Convert latency to CPU Load: 2ms=1%, 100ms=50%, 200ms+=100%
+                  const load = Math.min(100, Math.max(0.1, latency * 0.5));
+                  this.updateProcessCpu(pid, load);
+                  worker.removeEventListener('message', pongHandler);
+              }
+          };
+          
+          worker.addEventListener('message', pongHandler);
+          worker.postMessage({ type: 'PING', callId });
+
+          // Timeout if worker is totally frozen
+          setTimeout(() => {
+              if (this._processes.has(pid)) {
+                 const proc = this._processes.get(pid);
+                 if (proc && proc.cpuUsage === 0) this.updateProcessCpu(pid, 100);
+              }
+          }, 1000);
+      }, 2000);
+
+      // Special handling: forward kernel events back to this worker
+      // This is crucial for GDI/User32 interactions
+      const forwardEvent = (name: string, data: any) => {
+          if (data && data.pid === pid) return; // Don't loop back
+          worker.postMessage({ type: 'EVENT', data: { name, data } });
+      };
+
+      const eventNames = ['user32:mouse', 'user32:dom_event', 'user32:set_mode'];
+      const unbinds = eventNames.map(name => this.on(name, (d) => {
+          forwardEvent(name, d);
+      }));
+      
+      unbinds.push(() => clearInterval(monitorInterval));
+
+      // Store unbinds in process info to cleanup on terminate
+      if (proc) (proc as any)._unbinds = unbinds;
+
     } catch (outerError: any) {
+      this.log('ERROR', 'ExecutionEngine', `Critical failure spawning process ${pid}: ${outerError.message}`);
       this.terminateProcess(pid);
     }
   }
@@ -1091,6 +1305,18 @@ class Kernel {
   terminateProcess(pid: number) {
     const proc = this._processes.get(pid);
     if (!proc) return;
+
+    // Cleanup Worker if it exists (Real Multitasking Isolation)
+    if ((proc as any).worker) {
+       (proc as any).worker.terminate();
+       this.log('INFO', 'ExecutionEngine', `Worker for PID:${pid} terminated.`);
+    }
+
+    // Cleanup event forwards
+    if ((proc as any)._unbinds) {
+       (proc as any)._unbinds.forEach((u: any) => u());
+    }
+
     this.freeMemory(proc.memoryUsage);
     this._processes.delete(pid);
     
@@ -1429,6 +1655,9 @@ class Kernel {
     width?: number; height?: number; minWidth?: number; minHeight?: number;
     isResizable?: boolean; processId: number;
     params?: any;
+    hasFrame?: boolean;
+    isSystem?: boolean;
+    zIndex?: number;
   }): string {
     const id = uuidv4();
     const sw = typeof window !== 'undefined' ? window.innerWidth : 1920;
@@ -1436,23 +1665,33 @@ class Kernel {
     const w = config.width || 800;
     const h = config.height || 600;
     
-    // Deactivate current active window
-    for (const [wid, win] of this._windows.entries()) {
-      if (win.isActive) this._windows.set(wid, { ...win, isActive: false });
+    const hasFrame = config.hasFrame !== false;
+    const isSystem = config.isSystem === true;
+
+    // Deactivate current active window only if new window is NOT a system window
+    if (!isSystem) {
+      for (const [wid, win] of this._windows.entries()) {
+        if (win.isActive) this._windows.set(wid, { ...win, isActive: false });
+      }
     }
 
     const nw: WindowState = {
       id, title: config.title, icon: config.icon, appId: config.appId,
-      x: Math.max(40, (sw - w) / 2 + Math.random() * 60 - 30),
-      y: Math.max(20, (sh - h) / 2 + Math.random() * 60 - 30),
+      x: isSystem ? (config.params?.x ?? 0) : Math.max(40, (sw - w) / 2 + Math.random() * 60 - 30),
+      y: isSystem ? (config.params?.y ?? 0) : Math.max(20, (sh - h) / 2 + Math.random() * 60 - 30),
       width: w, height: h,
       minWidth: config.minWidth || 400, minHeight: config.minHeight || 300,
-      isMinimized: false, isMaximized: false, isActive: true,
-      zIndex: ++this._topZIndex, opacity: 1,
-      isResizable: config.isResizable !== false, isDraggable: true,
-      isClosable: true, isMinimizable: true, isMaximizable: true,
+      isMinimized: false, isMaximized: false, isActive: !isSystem,
+      zIndex: config.zIndex ?? (isSystem ? 1000 : ++this._topZIndex), opacity: 1,
+      isResizable: !isSystem && config.isResizable !== false, 
+      isDraggable: !isSystem,
+      isClosable: !isSystem, 
+      isMinimizable: !isSystem, 
+      isMaximizable: !isSystem,
       processId: config.processId,
       params: config.params,
+      hasFrame,
+      isSystem,
     };
     this._windows.set(id, nw);
     this._activeWindowId = id;
@@ -1615,6 +1854,7 @@ class Kernel {
     this._topZIndex = 100;
     this._activeWindowId = null;
     
+    this._initSystemState();
     this._initFileSystem();
     this._initRegistry();
     this._initSystemProcesses();
@@ -1625,4 +1865,7 @@ class Kernel {
 
 // Export singleton
 export const kernel = Kernel.getInstance();
+if (typeof window !== 'undefined') {
+  (window as any).kernel = kernel;
+}
 export default kernel;

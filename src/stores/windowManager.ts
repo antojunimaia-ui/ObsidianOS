@@ -21,6 +21,9 @@ type OpenWindowConfig = {
   isResizable?: boolean;
   processId: number;
   params?: any;
+  hasFrame?: boolean;
+  isSystem?: boolean;
+  zIndex?: number;
 };
 
 interface WindowManagerState {

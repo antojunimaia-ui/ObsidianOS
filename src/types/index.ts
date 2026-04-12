@@ -38,6 +38,8 @@ export interface WindowState {
   isMaximizable: boolean;
   processId: number;
   params?: any;
+  hasFrame: boolean;
+  isSystem: boolean;
   prevBounds?: { x: number; y: number; width: number; height: number };
 }
 
@@ -152,6 +154,7 @@ export interface AppDefinition {
   minHeight: number;
   isResizable: boolean;
   isSingleInstance: boolean;
+  hasFrame?: boolean;
   category: 'system' | 'productivity' | 'utilities' | 'entertainment';
   binaryPath?: string; // For SDK apps — path to the .exe binary to execute
 }

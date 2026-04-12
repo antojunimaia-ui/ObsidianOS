@@ -12,14 +12,14 @@ import { useWindowManager } from './stores/windowManager';
 import { useRegistry } from './stores/registry';
 import kernel from './core/kernel';
 import LockScreen from './components/LockScreen/LockScreen';
-import Desktop from './components/Desktop/Desktop';
-import Taskbar from './components/Taskbar/Taskbar';
+import SetupWizard from './components/Setup/SetupWizard';
 import StartMenu from './components/StartMenu/StartMenu';
 import WindowRenderer from './components/Window/WindowRenderer';
 import { useContextMenuStore } from './stores/contextMenuStore';
 import ContextMenu from './components/ContextMenu/ContextMenu';
 import { NotificationContainer } from './components/Notifications/NotificationContainer';
 import { NotificationCenter } from './components/Notifications/NotificationCenter';
+import { useUserStore } from './stores/userStore';
 import './index.css';
 
 export default function App() {
@@ -31,6 +31,15 @@ export default function App() {
     return count >= 3;
   });
   const getRegValue = useRegistry(s => s.getValue);
+  const { currentUser } = useUserStore();
+
+  // SYNC: Ensure Kernel user matches persisted Local User Store
+  useEffect(() => {
+    if (currentUser) {
+      (kernel as any)._user = currentUser;
+      (kernel as any)._emitSystemSnapshot();
+    }
+  }, [currentUser]);
 
   // Sync Hardware from Registry
   useEffect(() => {
@@ -157,9 +166,45 @@ export default function App() {
     return () => clearInterval(interval);
   }, [processes, bootPhase, isBSOD]);
 
-  // O kernel garante que ao terminar um processo, a janela já é fechada via kernel.closeWindow()
-  // e ao fechar uma janela, o processo é encerrado via kernel.terminateProcess().
-  // Não é mais necessário um sync loop externo.
+  // Start Shell Components as Windows (DEEP REALISM: Taskbar as a Window)
+  useEffect(() => {
+    if (bootPhase === 'desktop' && explorerRunning) {
+      const proc = processes.find(p => p.name === 'explorer.exe');
+      if (proc) {
+        // Only open if not already opened (check registry or process windows)
+        const hasTaskbar = kernel.getWindows().some(w => w.appId === 'taskbar');
+        if (!hasTaskbar) {
+          openWindow({
+            appId: 'taskbar',
+            title: 'Taskbar',
+            icon: '',
+            processId: proc.pid,
+            width: window.innerWidth,
+            height: 48,
+            hasFrame: false,
+            isSystem: true,
+            params: { x: 0, y: window.innerHeight - 48 }
+          });
+        }
+
+        const hasDesktop = kernel.getWindows().some(w => w.appId === 'desktop');
+        if (!hasDesktop) {
+          openWindow({
+            appId: 'desktop',
+            title: 'Desktop',
+            icon: '',
+            processId: proc.pid,
+            width: window.innerWidth,
+            height: window.innerHeight - 48,
+            hasFrame: false,
+            isSystem: true,
+            zIndex: 1,
+            params: { x: 0, y: 0 }
+          });
+        }
+      }
+    }
+  }, [bootPhase, explorerRunning, processes, openWindow]);
 
   const { isOpen, x, y, items, closeContextMenu } = useContextMenuStore();
 
@@ -184,14 +229,15 @@ export default function App() {
           {/* Desktop Environment */}
           {bootPhase === 'desktop' && (
             <>
-              {explorerRunning && <Desktop />}
               <WindowRenderer />
               {explorerRunning && <StartMenu />}
-              {explorerRunning && <Taskbar />}
             </>
           )}
 
-          {/* Global Notifications */}
+          {/* OOBE / Initial Setup */}
+          {bootPhase === 'setup' && <SetupWizard />}
+
+          {/* System Dialogs & Overlays */}
           <NotificationContainer />
           <NotificationCenter />
 

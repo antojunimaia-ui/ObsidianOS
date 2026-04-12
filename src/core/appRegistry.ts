@@ -16,10 +16,14 @@ const components: Record<string, ReturnType<typeof lazy>> = {
   'task-manager': lazy(() => import('../apps/TaskManager/TaskManager')),
   'browser': lazy(() => import('../apps/Browser/Browser')),
   'regedit': lazy(() => import('../apps/Regedit/Regedit')),
+  'obsidian-code': lazy(() => import('../apps/ObsidianCode/ObsidianCode')),
+  'obs-record': lazy(() => import('../apps/ObsRecord/ObsRecord')),
+  'taskbar': lazy(() => import('../components/Taskbar/Taskbar')),
+  'desktop': lazy(() => import('../components/Desktop/Desktop')),
 };
 
-// Fallback for SDK / unknown apps — loaded lazily to avoid circular deps
-const SdkAppRunner = lazy(() => import('../apps/SdkAppRunner/SdkAppRunner'));
+// O novo Motor de Renderização Gráfica intercepta scripts puros que querem desenhar tela
+const HwndRenderer = lazy(() => import('../components/Window/HwndRenderer'));
 
 interface AppRegistryState {
   apps: Record<string, AppDefinition>;
@@ -39,8 +43,8 @@ export const useAppRegistry = create<AppRegistryState>((set, get) => ({
   setReady: (ready) => set({ isReady: ready }),
 }));
 
-// Helper to get component by ID — falls back to SdkAppRunner for unknown/SDK apps
-export const getAppComponent = (id: string) => components[id] ?? SdkAppRunner;
+// Helper to get component by ID — falls back to HwndRenderer for Pure-JS executables
+export const getAppComponent = (id: string) => components[id] ?? HwndRenderer;
 
 // Backward compatibility or for things that need a list
 export const getAppList = () => Object.values(useAppRegistry.getState().apps);

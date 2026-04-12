@@ -130,7 +130,7 @@ export default function Window({ windowId, children }: Props) {
   return (
     <div
       ref={windowRef}
-      className={`window ${win.isActive ? 'active' : ''} ${win.isMaximized ? 'maximized' : ''}`}
+      className={`window ${win.isActive ? 'active' : ''} ${win.isMaximized ? 'maximized' : ''} ${!win.hasFrame ? 'frameless' : ''} ${win.isSystem ? 'system-window' : ''}`}
       style={{
         left: win.x,
         top: win.y,
@@ -140,34 +140,36 @@ export default function Window({ windowId, children }: Props) {
       }}
       onMouseDown={handleMouseDown}
     >
-      {/* Title Bar */}
-      <div className="window-titlebar" onMouseDown={handleTitleMouseDown} onDoubleClick={() => toggleMaximize(windowId)} onContextMenu={handleWindowContextMenu}>
-        <div className="window-titlebar-left">
-          <span className="window-icon">{win.icon}</span>
-          <span className="window-title text-ellipsis">{win.title}</span>
+      {/* Title Bar - Only show if hasFrame is True */}
+      {win.hasFrame && (
+        <div className="window-titlebar" onMouseDown={handleTitleMouseDown} onDoubleClick={() => toggleMaximize(windowId)} onContextMenu={handleWindowContextMenu}>
+          <div className="window-titlebar-left">
+            <span className="window-icon">{win.icon}</span>
+            <span className="window-title text-ellipsis">{win.title}</span>
+          </div>
+          <div className="window-controls">
+            {win.isMinimizable && (
+              <button className="window-btn minimize" onClick={(e) => { e.stopPropagation(); minimizeWindow(windowId); }} title="Minimizar">
+                <svg width="12" height="12" viewBox="0 0 12 12"><rect y="5" width="12" height="1.5" rx="0.75" fill="currentColor"/></svg>
+              </button>
+            )}
+            {win.isMaximizable && (
+              <button className="window-btn maximize" onClick={(e) => { e.stopPropagation(); toggleMaximize(windowId); }} title={win.isMaximized ? "Restaurar" : "Maximizar"}>
+                {win.isMaximized ? (
+                  <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="0" width="9" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.3" fill="none"/><rect x="0" y="2.5" width="9" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.3" fill="none"/></svg>
+                ) : (
+                  <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3" fill="none"/></svg>
+                )}
+              </button>
+            )}
+            {win.isClosable && (
+              <button className="window-btn close" onClick={(e) => { e.stopPropagation(); handleClose(); }} title="Fechar">
+                <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              </button>
+            )}
+          </div>
         </div>
-        <div className="window-controls">
-          {win.isMinimizable && (
-            <button className="window-btn minimize" onClick={(e) => { e.stopPropagation(); minimizeWindow(windowId); }} title="Minimizar">
-              <svg width="12" height="12" viewBox="0 0 12 12"><rect y="5" width="12" height="1.5" rx="0.75" fill="currentColor"/></svg>
-            </button>
-          )}
-          {win.isMaximizable && (
-            <button className="window-btn maximize" onClick={(e) => { e.stopPropagation(); toggleMaximize(windowId); }} title={win.isMaximized ? "Restaurar" : "Maximizar"}>
-              {win.isMaximized ? (
-                <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="0" width="9" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.3" fill="none"/><rect x="0" y="2.5" width="9" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.3" fill="none"/></svg>
-              ) : (
-                <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3" fill="none"/></svg>
-              )}
-            </button>
-          )}
-          {win.isClosable && (
-            <button className="window-btn close" onClick={(e) => { e.stopPropagation(); handleClose(); }} title="Fechar">
-              <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-            </button>
-          )}
-        </div>
-      </div>
+      )}
 
       {/* Content */}
       <div className="window-content">

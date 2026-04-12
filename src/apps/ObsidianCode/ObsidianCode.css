@@ -1,0 +1,89 @@
+.obsidian-code {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  font-family: 'Consolas', 'Courier New', monospace;
+}
+
+.obsidian-code-toolbar {
+  padding: 8px;
+  background-color: #333333;
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid #444;
+}
+
+.code-btn {
+  background: #007acc;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  transition: background 0.1s;
+}
+
+.code-btn:hover {
+  background: #005999;
+}
+
+.code-run-btn {
+  background: #28a745;
+}
+
+.code-run-btn:hover {
+  background: #218838;
+}
+
+.code-run-btn:disabled {
+  background: #555;
+  cursor: not-allowed;
+}
+
+.obsidian-code-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.code-textarea {
+  flex: 1;
+  background: transparent;
+  color: #9cdcfe;
+  border: none;
+  padding: 10px;
+  resize: none;
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  white-space: pre;
+  line-height: 1.5;
+}
+
+.obsidian-code-console {
+  height: 150px;
+  background: #000;
+  color: #ccc;
+  border-top: 2px solid #444;
+  padding: 8px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.obsidian-code-statusbar {
+  background: #007acc;
+  color: white;
+  padding: 4px 10px;
+  font-size: 12px;
+  display: flex;
+  justify-content: space-between;
+}

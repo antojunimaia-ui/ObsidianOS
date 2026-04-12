@@ -101,6 +101,7 @@ export default function TerminalApp({ windowId }: { windowId: string }) {
         addOutput('  tree              - Árvore de diretórios');
         addOutput('  ipconfig          - Configuração de rede');
         addOutput('  ping <host>       - Ping');
+        addOutput('  neofetch          - Exibir informações do sistema com logo');
         break;
 
       case 'dir':
@@ -324,6 +325,55 @@ export default function TerminalApp({ windowId }: { windowId: string }) {
         addOutput('');
         addOutput(`Estatísticas do Ping para ${args[0]}:`);
         addOutput('    Pacotes: Enviados = 4, Recebidos = 4, Perdidos = 0 (0% de perda)');
+        break;
+      }
+
+      case 'neofetch': {
+        const res = kernel.resources;
+        const snapshot = kernel.sysGetSnapshot();
+        const uptime = res.uptime;
+        const h = Math.floor(uptime / 3600);
+        const m = Math.floor((uptime % 3600) / 60);
+        const s = uptime % 60;
+        const uptimeStr = `${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
+        
+        const logo = [
+          "       .       ",
+          "      / \\      ",
+          "     /   \\     ",
+          "    /     \\    ",
+          "   /       \\   ",
+          "  /_________\\  ",
+          "  \\         /  ",
+          "   \\       /   ",
+          "    \\     /    ",
+          "     \\   /     ",
+          "      \\ /      ",
+          "       '       "
+        ];
+        
+        const info = [
+          `user@obsidianos`,
+          "---------------",
+          `OS: ObsidianOS Professional 24H2`,
+          `Kernel: ObsidianOS-NT v2.4.0`,
+          `Uptime: ${uptimeStr}`,
+          `Packages: 9 (System32)`,
+          `Shell: cmd.exe`,
+          `Resolution: ${window.innerWidth}x${window.innerHeight}`,
+          `Theme: ${snapshot.theme.mode}`,
+          `CPU: ${res.cpuCores} Cores @ 3.2GHz`,
+          `Memory: ${Math.round(res.usedMemory)}MB / ${res.totalMemory}MB`
+        ];
+        
+        const maxLen = Math.max(logo.length, info.length);
+        addOutput("");
+        for (let i = 0; i < maxLen; i++) {
+          const l = logo[i] || "               ";
+          const infoLine = info[i] || "";
+          addOutput(`${l}  ${infoLine}`);
+        }
+        addOutput("");
         break;
       }
 

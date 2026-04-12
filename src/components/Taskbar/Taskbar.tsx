@@ -30,7 +30,7 @@ export default function Taskbar() {
     year: 'numeric',
   });
 
-  const taskbarWindows = windows.filter(w => w.appId !== 'system');
+  const taskbarWindows = windows.filter(w => !w.isSystem);
 
   const handleTaskbarItemClick = (windowId: string) => {
     const win = windows.find(w => w.id === windowId);
