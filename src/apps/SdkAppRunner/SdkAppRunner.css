@@ -1,53 +1,33 @@
-.sdk-runner {
-  display: flex;
-  flex-direction: column;
+.sdk-app-runner {
+  width: 100%;
   height: 100%;
-  background: #0c0c0c;
-  color: #cccccc;
-  font-family: 'Consolas', 'Courier New', monospace;
-  font-size: 13px;
+  background: #000;
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+  font-family: 'Consolas', monospace;
 }
 
-.sdk-runner__output {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
+.sdk-terminal-overlay {
+  padding: 20px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #ef4444;
+  background: rgba(0,0,0,0.8);
+  height: 100%;
 }
 
-.sdk-runner__line {
-  line-height: 1.5;
-  margin: 0;
+/* Common UI Elements created by Apps */
+.sdk-app-runner button {
+    background: #4f46e5;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
 }
 
-.sdk-runner__line--stderr {
-  color: #f14c4c;
-}
-
-.sdk-runner__line--system {
-  color: #888;
-  font-style: italic;
-}
-
-.sdk-runner__status {
-  padding: 4px 12px;
-  background: #1a1a1a;
-  border-top: 1px solid #333;
-  font-size: 11px;
-  color: #666;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.sdk-runner__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #4ec94e;
-}
-
-.sdk-runner__dot--done {
-  background: #666;
+.sdk-app-runner button:hover {
+    background: #6366f1;
 }

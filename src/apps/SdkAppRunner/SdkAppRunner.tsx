@@ -1,93 +1,96 @@
-// ============================================
-// SDK App Runner - Executes .exe SDK binaries
-// ============================================
-import { useEffect, useRef, useState } from 'react';
-import { kernel } from '../../core/kernel';
+import { useState, useEffect, useRef } from 'react';
+import { useFileSystem } from '../../stores/fileSystem';
+import kernel from '../../core/kernel';
 import './SdkAppRunner.css';
-
-interface OutputLine {
-  text: string;
-  type: 'stdout' | 'stderr' | 'system';
-}
 
 interface SdkAppRunnerProps {
   windowId: string;
+  binaryPath: string; // O caminho do .exe no VFS
 }
 
-export default function SdkAppRunner({ windowId }: SdkAppRunnerProps) {
-  const [lines, setLines] = useState<OutputLine[]>([]);
-  const [running, setRunning] = useState(true);
-  const outputRef = useRef<HTMLDivElement>(null);
-  const startedRef = useRef(false);
+export default function SdkAppRunner({ windowId, binaryPath }: SdkAppRunnerProps) {
+  const [output, setOutput] = useState<string[]>([]);
+  const { getNode } = useFileSystem();
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const log = (msg: string) => setOutput(prev => [...prev, msg]);
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-
-    const win = kernel.getWindow(windowId);
-    if (!win) return;
-
-    const pid = win.processId;
-    const binaryPath: string | undefined = win.params?.binaryPath;
-
-    if (!binaryPath) {
-      setTimeout(() => {
-        setLines([{ text: 'Error: No binaryPath provided in window params.', type: 'stderr' }]);
-        setRunning(false);
-      }, 0);
-      return;
-    }
-
-    const addLine = (text: string, type: OutputLine['type']) => {
-      setLines(prev => [...prev, { text, type }]);
-    };
-
-    addLine(`Executing: ${binaryPath}`, 'system');
-
-    const offStdout = kernel.on('process:stdout', ({ pid: p, message }: { pid: number; message: string }) => {
-      if (p === pid) addLine(message, 'stdout');
-    });
-
-    const offStderr = kernel.on('process:stderr', ({ pid: p, message }: { pid: number; message: string }) => {
-      if (p === pid) addLine(message, 'stderr');
-    });
-
-    const offTerminated = kernel.on('process:terminated', (terminatedPid: number) => {
-      if (terminatedPid === pid) {
-        addLine('Process exited.', 'system');
-        setRunning(false);
+    const run = async () => {
+      const node = getNode(binaryPath);
+      if (!node || !node.content) {
+        log("Erro: Binário não encontrado ou corrompido.");
+        return;
       }
-    });
 
-    kernel.executeBinary(pid, binaryPath);
+      log(`Iniciando ${node.name}...`);
 
-    return () => {
-      offStdout();
-      offStderr();
-      offTerminated();
+      try {
+        // Sandboxing básico via novo Function
+        // Injetamos a API 'OS' para o app interagir com o sistema
+        const appCode = node.content;
+        
+        const OSProxy = {
+          User32: {
+            CreateElement: (tag: string, id: string, props: any) => {
+                if (!containerRef.current) return;
+                const el = document.createElement(tag);
+                el.id = id;
+                Object.assign(el.style, props.style || {});
+                if (props.innerText) el.innerText = props.innerText;
+                if (props.className) el.className = props.className;
+                containerRef.current.appendChild(el);
+            },
+            OnMessage: (id: string, event: string, cb: Function) => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener(event, (e) => cb(e));
+            },
+            UpdateStyle: (id: string, style: any) => {
+                const el = document.getElementById(id);
+                if (el) Object.assign(el.style, style);
+            },
+            SetText: (id: string, text: string) => {
+                const el = document.getElementById(id);
+                if (el) el.innerText = text;
+            },
+            AddEventListener: (type: string, cb: Function) => {
+                window.addEventListener(type, (e) => cb(e));
+                // Clean up on unmount would be better but let's keep it simple for now
+            }
+          },
+          Kernel: {
+            Log: (msg: string) => kernel.log('INFO', node.name, msg),
+            Exit: () => {
+                const proc = kernel.getProcessByWindowId(windowId);
+                if (proc) kernel.terminateProcess(proc.pid);
+            }
+          },
+          Print: (msg: any) => log(String(msg))
+        };
+
+        const runner = new Function('OS', 'print', `
+            return (async () => {
+                ${appCode}
+            })()
+        `);
+
+        await runner(OSProxy, log);
+      } catch (err: any) {
+        log(`CRASH: ${err.message}`);
+        kernel.log('ERROR', 'SdkRunner', `App ${node.name} falhou: ${err.message}`);
+      }
     };
-  }, [windowId]);
 
-  // Auto-scroll to bottom
-  useEffect(() => {
-    if (outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
-    }
-  }, [lines]);
+    run();
+  }, [binaryPath]);
 
   return (
-    <div className="sdk-runner">
-      <div className="sdk-runner__output" ref={outputRef}>
-        {lines.map((line, i) => (
-          <p key={i} className={`sdk-runner__line sdk-runner__line--${line.type}`}>
-            {line.text}
-          </p>
-        ))}
-      </div>
-      <div className="sdk-runner__status">
-        <span className={`sdk-runner__dot ${!running ? 'sdk-runner__dot--done' : ''}`} />
-        {running ? 'Running...' : 'Process exited'}
-      </div>
+    <div className="sdk-app-runner" ref={containerRef}>
+      {output.length > 0 && output[output.length-1].startsWith('CRASH') && (
+        <div className="sdk-terminal-overlay">
+          {output.map((line, i) => <div key={i}>{line}</div>)}
+        </div>
+      )}
     </div>
   );
 }

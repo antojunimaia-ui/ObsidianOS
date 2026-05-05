@@ -6,12 +6,17 @@
 // system calls, event logging, and inter-process communication.
 
 import { v4 as uuidv4 } from 'uuid';
-import type { Process, WindowState, FileSystemNode, SystemTheme, UserProfile } from '../types';
+import type { Process, ProcessPriority, Signal, WindowState, FileSystemNode, SystemTheme, UserProfile, PartitionTable, PartitionEntry, BootConfig, BootEntry } from '../types';
 import { defaultNodes, makeFile, makeDir } from './defaultFileSystem';
 import { defaultRegistry, type RegistryEntry, type RegistryValue } from './defaultRegistry';
 import { opfsDriver, type OPFSDriver } from './opfsDriver';
 
+import { Lexer } from './osl/lexer';
+import { Parser } from './osl/parser';
+import { Interpreter } from './osl/interpreter';
+
 export type KernelLogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL' | 'FATAL';
+
 
 export interface KernelLogEntry {
   timestamp: number;
@@ -112,10 +117,37 @@ class Kernel {
   private _processes: Map<number, Process> = new Map();
   private _nextPid: number = 100;
 
+  // ── Scheduler ─────────────────────────────────────────────────────────────
+  // Round-Robin with priority queues (5 levels, REALTIME→IDLE)
+  private _runQueues: Map<ProcessPriority, number[]> = new Map([
+    ['REALTIME',     []],
+    ['HIGH',         []],
+    ['ABOVE_NORMAL', []],
+    ['NORMAL',       []],
+    ['BELOW_NORMAL', []],
+    ['IDLE',         []],
+  ]);
+  private _schedulerInterval: ReturnType<typeof setInterval> | null = null;
+  private static readonly QUANTUM_MS: Record<ProcessPriority, number> = {
+    REALTIME:     10,
+    HIGH:         20,
+    ABOVE_NORMAL: 30,
+    NORMAL:       50,
+    BELOW_NORMAL: 80,
+    IDLE:         120,
+  };
+  private static readonly PRIORITY_ORDER: ProcessPriority[] = [
+    'REALTIME', 'HIGH', 'ABOVE_NORMAL', 'NORMAL', 'BELOW_NORMAL', 'IDLE',
+  ];
+
   // ── Window Table ──────────────────────────────────────────────────────────
   private _windows: Map<string, WindowState> = new Map();
   private _topZIndex: number = 100;
   private _activeWindowId: string | null = null;
+
+  // ── Partition Table ────────────────────────────────────────────────────────
+  private _partitionTable: PartitionTable | null = null;
+  private _bootConfig: BootConfig | null = null;
 
   // ── File System ────────────────────────────────────────────────────────────
   private _filesystem: Map<string, FileSystemNode> = new Map();
@@ -157,6 +189,7 @@ class Kernel {
     this._initFileSystem();
     this._initRegistry();
     this._initSystemProcesses();
+    this._initPartitionTable();
   }
 
   // ========== THE BIOS (NATIVE BOOT) ==========
@@ -187,29 +220,29 @@ class Kernel {
       this.bootPhase = 'BIOS_HARDWARE';
       this.addBootLog('Scanning for drives... Done [C: FIXED]');
       
-      let bootmgr = this.fsGetNode('C:\\ObsidianOS\\System32\\bootmgr.exe');
+      let bootmgr = this.fsGetNode('C:\\ObsidianOS\\System32\\bootmgr.obx');
       if (!bootmgr) {
         if (this._diskDriver) {
           // OPFS is active — the file was genuinely deleted. No auto-repair.
           this.addBootLog('BOOTMGR not found. Boot failure.');
           this.triggerBSOD({
             stopCode: 'BOOT_LOADER_FAILURE',
-            technicalInfo: 'bootmgr.exe is missing from C:\\ObsidianOS\\System32. The system cannot boot.',
-            failedComponent: 'bootmgr.exe',
+            technicalInfo: 'bootmgr.obx is missing from C:\\ObsidianOS\\System32. The system cannot boot.',
+            failedComponent: 'bootmgr.obx',
             bugCheckCode: '0x000000F4',
-            parameters: ['bootmgr.exe', 'C:\\ObsidianOS\\System32', '0x0', '0x0'],
+            parameters: ['bootmgr.obx', 'C:\\ObsidianOS\\System32', '0x0', '0x0'],
           });
           return;
         }
         // No OPFS — safe to auto-repair from defaultNodes
         this.addBootLog('BOOTMGR not found. Starting Auto-Repair...');
         this.fsDeepReformat();
-        bootmgr = this.fsGetNode('C:\\ObsidianOS\\System32\\bootmgr.exe');
+        bootmgr = this.fsGetNode('C:\\ObsidianOS\\System32\\bootmgr.obx');
         if (!bootmgr) throw new Error('SYSTEM_REPAIR_FAILED');
         this.addBootLog('Auto-Repair Success. BOOTMGR Restored.');
       }
 
-      this.addBootLog('Locating Bootloader... Found [C:\\ObsidianOS\\System32\\bootmgr.exe]');
+      this.addBootLog('Locating Bootloader... Found [C:\\ObsidianOS\\System32\\bootmgr.obx]');
       this.bootPhase = 'BOOTLOADER';
 
       // Pre-flight: restore critical boot config files if missing
@@ -234,8 +267,8 @@ class Kernel {
 
       this.addBootLog('Handing over control to Boot Manager...');
       
-      const pid = this.createProcess('bootmgr.exe', 'Boot Manager', '⚙️');
-      this.executeBinary(pid, 'C:\\ObsidianOS\\System32\\bootmgr.exe');
+      const pid = this.createProcess('bootmgr.obx', 'Boot Manager', '⚙️');
+      this.executeBinary(pid, 'C:\\ObsidianOS\\System32\\bootmgr.obx');
     } catch (e: any) {
       this.log('ERROR', 'BIOS', `Hardware Failure: ${e.message}`);
       this.addBootLog('!!! BIOS HARDWARE FAILURE !!!');
@@ -247,13 +280,12 @@ class Kernel {
   finalizeBoot() {
     this.addBootLog('Native Boot Handoff... OK');
     this.log('INFO', 'Kernel', 'Boot Manager handoff successful.');
-    
-    // Give UI thread a moment before signals change
     setTimeout(() => {
       this._isBooting = false;
       this._isBootFinished = true;
       this._isInitialized = true;
       this.startUptimeCounter();
+      this.startScheduler();
       this.emit('boot:finished');
     }, 150);
   }
@@ -263,14 +295,14 @@ class Kernel {
     if (this._shellLoaded) return true;
     this._shellLoaded = true;
 
-    const explorer = this.fsGetNode('C:\\ObsidianOS\\System32\\explorer.exe');
+    const explorer = this.fsGetNode('C:\\ObsidianOS\\System32\\explorer.obx');
     if (!explorer) {
       this.triggerBSOD({
         stopCode: 'SHELL_INITIALIZATION_FAILED',
-        technicalInfo: 'explorer.exe not found. Cannot load desktop shell.',
-        failedComponent: 'explorer.exe',
+        technicalInfo: 'explorer.obx not found. Cannot load desktop shell.',
+        failedComponent: 'explorer.obx',
         bugCheckCode: '0x000000F4',
-        parameters: ['explorer.exe', 'C:\\ObsidianOS\\System32'],
+        parameters: ['explorer.obx', 'C:\\ObsidianOS\\System32'],
       });
       return false;
     }
@@ -287,30 +319,32 @@ class Kernel {
     await this.scanSystemApps(fsProxy, registryProxy);
     
     // Create processes
-    this.createProcess('explorer.exe', 'ObsidianOS Explorer', '📁');
+    this.createProcess('explorer.obx', 'ObsidianOS Explorer', '📁');
     this._resources.usedMemory += 96;
 
-    const dwm = this.fsGetNode('C:\\ObsidianOS\\System32\\dwm.exe');
+    const dwm = this.fsGetNode('C:\\ObsidianOS\\System32\\dwm.obx');
     if (dwm) {
-      this.createProcess('dwm.exe', 'Desktop Window Manager', '🖥️');
+      this.createProcess('dwm.obx', 'Desktop Window Manager', '🖥️');
       this._resources.usedMemory += 72;
     }
 
-    const searchHost = this.fsGetNode('C:\\ObsidianOS\\System32\\SearchHost.exe');
+    const searchHost = this.fsGetNode('C:\\ObsidianOS\\System32\\SearchHost.obx');
     if (searchHost) {
-      this.createProcess('SearchHost.exe', 'Search Host', '🔍');
+      this.createProcess('SearchHost.obx', 'Search Host', '🔍');
       this._resources.usedMemory += 48;
     }
 
-    // Check if we need OOBE (Initial Setup)
-    const setupCompleted = localStorage.getItem('obsidianos-setup-completed') === 'true';
-    
-    if (!setupCompleted) {
+    // Check OOBE flag — if SetupInProgress is set, go to setup wizard first
+    const setupInProgress = this.regGetValue('HKEY_LOCAL_MACHINE\\SYSTEM\\Setup\\SetupInProgress');
+    if (setupInProgress === 1) {
+      this.log('INFO', 'Kernel', 'OOBE detected — launching Setup Wizard');
       this.bootPhase = 'OOBE';
     } else {
+      // Normal boot — hand off to Winlogon (LockScreen handles auth in React)
       this.bootPhase = 'WINLOGON';
     }
-    this.log('INFO', 'Kernel', 'Desktop environment ready');
+
+    this.log('INFO', 'Kernel', 'Session manager handoff complete');
     return true;
   }
 
@@ -360,18 +394,35 @@ class Kernel {
       this._filesystem = new Map(Object.entries(defaultNodes));
       return;
     }
-    
+
     // Migrate or load
     const savedFsV2 = localStorage.getItem('obsidianos-filesystem-v2');
     if (savedFsV2) {
       try {
-        this._filesystem = new Map(Object.entries(JSON.parse(savedFsV2)));
+        const parsed: Record<string, FileSystemNode> = JSON.parse(savedFsV2);
+
+        // ── .exe → .obx migration ──────────────────────────────────────────
+        // If the saved FS still has .exe executables, it's stale — wipe and
+        // rebuild from defaultNodes so the new .obx paths take effect.
+        const hasLegacyExe = Object.values(parsed).some(
+          n => n.extension === 'exe' && (n.metadata?.type === 'binary_executable' || n.metadata?.type === 'app_executable')
+        );
+        if (hasLegacyExe) {
+          console.info('[Kernel] Detected legacy .exe filesystem — migrating to .obx');
+          localStorage.removeItem('obsidianos-filesystem-v2');
+          this._filesystem = new Map(Object.entries(defaultNodes));
+          this._persistFileSystem();
+          return;
+        }
+        // ──────────────────────────────────────────────────────────────────
+
+        this._filesystem = new Map(Object.entries(parsed));
         return;
       } catch (e) {
         console.error('Failed to parse obsidianos-filesystem-v2', e);
       }
     }
-    
+
     const legacyFs = localStorage.getItem('webos-filesystem-v2') || localStorage.getItem('webos-filesystem');
     if (legacyFs) {
       try {
@@ -384,7 +435,7 @@ class Kernel {
         console.error('Failed to parse legacy filesystem', e);
       }
     }
-    
+
     this._filesystem = new Map(Object.entries(defaultNodes));
     this._persistFileSystem();
   }
@@ -406,7 +457,6 @@ class Kernel {
         loaded = true;
       } catch (e) {
         console.error('Failed to parse obsidianos-registry-v2, attempting legacy migration.', e);
-        // Fall through to legacy if parsing fails
       }
     }
 
@@ -417,11 +467,10 @@ class Kernel {
         try {
           const parsed = JSON.parse(legacyReg);
           this._registry = parsed?.state?.hives || parsed;
-          this._persistRegistry(); // Save as ObsidianOS V2 after migration
+          this._persistRegistry();
           loaded = true;
         } catch (e) {
           console.error('Failed to parse legacy registry, falling back to default.', e);
-          // Fall through to default if parsing fails
         }
       }
     }
@@ -431,28 +480,45 @@ class Kernel {
       this._registry = JSON.parse(JSON.stringify(defaultRegistry));
       this._persistRegistry();
     }
+
+    // ── Setup flag correction ──────────────────────────────────────────────
+    // If setup was already completed (localStorage flag), ensure the registry
+    // reflects that — even if the saved registry still has SetupInProgress = 1
+    // (e.g. from a previous session before this fix was applied).
+    if (localStorage.getItem('obsidianos-setup-completed') === 'true') {
+      const setupKey = 'HKEY_LOCAL_MACHINE\\SYSTEM\\Setup';
+      if (!this._registry[setupKey]) this._registry[setupKey] = {};
+      this._registry[setupKey]['SetupInProgress'] = { type: 'REG_DWORD', value: 0 };
+      this._registry[setupKey]['OOBEInProgress']  = { type: 'REG_DWORD', value: 0 };
+    }
+    // ──────────────────────────────────────────────────────────────────────
   }
 
   // ========== System Process Init ==========
   // Popula a tabela de processos com os processos base do SO.
   // NÃO emite eventos — a inicialização é silenciosa.
   private _initSystemProcesses() {
-    type InitProc = Omit<Process, 'startTime'>;
-    // NOTE: 'System' (PID 0) is intentionally absent — it is created by bootmgr.exe
+    type InitProc = Pick<Process, 'pid' | 'name' | 'title' | 'icon' | 'memoryUsage' | 'cpuUsage'>;
+    // NOTE: 'System' (PID 0) is intentionally absent — it is created by bootmgr.obx
     // during the boot sequence so it appears as a real boot-time process.
-    // explorer.exe, dwm.exe, SearchHost.exe are created by loadShell().
+    // explorer.obx, dwm.obx, SearchHost.obx are created by loadShell().
     const INITIAL: InitProc[] = [
-      { pid: 1, name: 'smss.exe',    title: 'Session Manager Subsystem',        icon: '⚙️', status: 'running', memoryUsage: 12.1,  cpuUsage: 0 },
-      { pid: 2, name: 'csrss.exe',   title: 'Client Server Runtime Process',    icon: '⚙️', status: 'running', memoryUsage: 45.8,  cpuUsage: 0.2 },
-      { pid: 3, name: 'wininit.exe', title: 'ObsidianOS Start-Up Application',  icon: '⚙️', status: 'running', memoryUsage: 18.5,  cpuUsage: 0 },
-      { pid: 4, name: 'services.exe',title: 'Services and Controller App',      icon: '⚙️', status: 'running', memoryUsage: 82.2,  cpuUsage: 0.3 },
-      { pid: 5, name: 'lsass.exe',   title: 'Local Security Authority Process', icon: '🔒', status: 'running', memoryUsage: 124.4, cpuUsage: 0.1 },
-      { pid: 6, name: 'svchost.exe', title: 'Service Host: Local System',       icon: '⚙️', status: 'running', memoryUsage: 428.6, cpuUsage: 0.5 },
+      { pid: 1, name: 'smss.obx',    title: 'Session Manager Subsystem',        icon: '⚙️', memoryUsage: 12.1,  cpuUsage: 0 },
+      { pid: 2, name: 'csrss.obx',   title: 'Client Server Runtime Process',    icon: '⚙️', memoryUsage: 45.8,  cpuUsage: 0.2 },
+      { pid: 3, name: 'wininit.obx', title: 'ObsidianOS Start-Up Application',  icon: '⚙️', memoryUsage: 18.5,  cpuUsage: 0 },
+      { pid: 4, name: 'services.obx',title: 'Services and Controller App',      icon: '⚙️', memoryUsage: 82.2,  cpuUsage: 0.3 },
+      { pid: 5, name: 'lsass.obx',   title: 'Local Security Authority Process', icon: '🔒', memoryUsage: 124.4, cpuUsage: 0.1 },
+      { pid: 6, name: 'svchost.obx', title: 'Service Host: Local System',       icon: '⚙️', memoryUsage: 428.6, cpuUsage: 0.5 },
     ];
     const startTime = Date.now();
     let totalRam = 0;
     INITIAL.forEach(p => {
-      this._processes.set(p.pid, { ...p, startTime });
+      const proc = this._makeProcess(p.pid, p.name, p.title, p.icon, 0, 'NORMAL');
+      proc.memoryUsage = p.memoryUsage;
+      proc.cpuUsage    = p.cpuUsage;
+      proc.startTime   = startTime;
+      this._processes.set(p.pid, proc);
+      this._addToRunQueue(proc);
       totalRam += p.memoryUsage;
     });
     this._resources.usedMemory = totalRam;
@@ -706,10 +772,9 @@ class Kernel {
     this.emit('bsod', info);
     this.emit('bootPhaseChange', 'BSOD', this._bootPhase);
     
-    // Stop uptime counter
-    if (this._uptimeInterval) {
-      clearInterval(this._uptimeInterval);
-    }
+    // Stop uptime counter and scheduler
+    if (this._uptimeInterval) clearInterval(this._uptimeInterval);
+    this.stopScheduler();
   }
 
   // ========== Uptime & Resource Loop ==========
@@ -758,7 +823,7 @@ class Kernel {
       const system32 = fs.getChildren('C:\\ObsidianOS\\System32');
       const progFiles = fs.getChildren('C:\\Program Files\\ObsidianOS Apps');
       const sdkExamples = fs.getChildren('C:\\ObsidianOS\\SDK\\examples');
-      const executables = [...system32, ...progFiles].filter((node: any) => node.extension === 'exe');
+      const executables = [...system32, ...progFiles].filter((node: any) => node.extension === 'obx');
       
       this.log('INFO', 'Discovery', `Found ${executables.length} potential executables.`);
       
@@ -791,7 +856,7 @@ class Kernel {
       }
 
       // Register SDK example .exe files as runnable SDK apps
-      const sdkExes = sdkExamples.filter((node: any) => node.extension === 'exe');
+      const sdkExes = sdkExamples.filter((node: any) => node.extension === 'obx');
       this.log('INFO', 'Discovery', `Found ${sdkExes.length} SDK example(s).`);
       for (const node of sdkExes) {
         const appId = `sdk:${node.name}`;
@@ -948,23 +1013,16 @@ class Kernel {
   }
 
   // ========== Process Management ==========
-  createProcess(name: string, title: string, icon: string, windowId?: string, binaryPath?: string, args: string[] = []): number {
+  createProcess(name: string, title: string, icon: string, windowId?: string, binaryPath?: string, args: string[] = [], priority: ProcessPriority = 'NORMAL'): number {
     const pid = this._nextPid++;
-    const ram = Math.random() * 80 + 30;
-    this.allocateMemory(ram, name);
-    const process: Process = {
-      pid, name, title, icon,
-      status: 'running',
-      memoryUsage: ram,
-      cpuUsage: Math.random() * 5,
-      startTime: Date.now(),
-      windowId,
-    };
-    this._processes.set(pid, process);
-    this.log('DEBUG', 'ProcessManager', `Created: ${name} [PID:${pid}]`);
-    this.emit('process:created', process);
+    const proc = this._makeProcess(pid, name, title, icon, 0, priority);
+    proc.windowId = windowId;
+    this.allocateMemory(proc.memoryUsage, name);
+    this._processes.set(pid, proc);
+    this._addToRunQueue(proc);
+    this.log('DEBUG', 'ProcessManager', `Created: ${name} [PID:${pid}] priority=${priority}`);
+    this.emit('process:created', proc);
 
-    // If it's a binary file, execute its content
     if (binaryPath) {
       this.executeBinary(pid, binaryPath, args);
     }
@@ -972,117 +1030,219 @@ class Kernel {
     return pid;
   }
 
+  // ── Scheduler helpers ──────────────────────────────────────────────────────
+
+  private _makeProcess(pid: number, name: string, title: string, icon: string, ppid: number, priority: ProcessPriority): Process {
+    const quantum = Kernel.QUANTUM_MS[priority];
+    return {
+      pid, ppid, name, title, icon,
+      state: 'READY',
+      priority,
+      quantum,
+      quantumUsed: 0,
+      totalCpuTime: 0,
+      lastScheduled: Date.now(),
+      memoryUsage: Math.random() * 80 + 30,
+      cpuUsage: 0,
+      pendingSignals: [],
+      signalHandlers: {},
+      startTime: Date.now(),
+      windowId: undefined,
+      // legacy compat
+      status: 'running',
+    };
+  }
+
+  private _addToRunQueue(proc: Process) {
+    const q = this._runQueues.get(proc.priority)!;
+    if (!q.includes(proc.pid)) q.push(proc.pid);
+  }
+
+  private _removeFromRunQueues(pid: number) {
+    for (const q of this._runQueues.values()) {
+      const i = q.indexOf(pid);
+      if (i !== -1) q.splice(i, 1);
+    }
+  }
+
   // ========== Binary Execution Engine ==========
   async executeBinary(pid: number, path: string, args: string[] = []) {
     const node = this.fsGetNode(path);
     if (!node || node.type !== 'file' || !node.content) {
       this.log('ERROR', 'ExecutionEngine', `Binary not found or corrupted: ${path}`);
-      this.terminateProcess(pid);
+      this.emit('process:stdout', { pid, message: `ERROR: Binary not found: ${path}` });
+      // Don't terminate — let the window stay open showing the error
       return;
     }
 
     const proc = this.getProcess(pid);
     if (!proc) return;
 
-    this.log('INFO', 'ExecutionEngine', `Executing binary: ${path} [PID:${pid}] with args: ${args.join(' ')}`);
+    this.log('INFO', 'ExecutionEngine', `Executing binary: ${path} [PID:${pid}]`);
 
-    // System Calls Definition (The official OS API for binaries)
-    const OS = {
+    // System Calls Definition
+    const OS: Record<string, any> = {
       pid,
       args,
-      print: (msg: string) => {
-        this.emit('process:stdout', { pid, message: msg });
-        this.log('DEBUG', `Proc:${pid}`, msg);
+      // ── I/O ──────────────────────────────────────────────────────────────
+      print:     (msg: string) => { this.emit('process:stdout', { pid, message: String(msg) }); this.log('DEBUG', `Proc:${pid}`, String(msg)); },
+      error:     (msg: string) => { this.emit('process:stderr', { pid, message: String(msg) }); this.log('ERROR', `Proc:${pid}`, String(msg)); },
+      // ── File System ───────────────────────────────────────────────────────
+      readFile:  (p: string) => this.fsGetNode(p)?.content ?? undefined,
+      writeFile: (p: string, c: string) => {
+        const parts = p.split('\\'); const name = parts.pop()!; const parent = parts.join('\\');
+        this.fsCreateFile(parent, name, c, name.split('.').pop() || 'txt');
       },
-      error: (msg: string) => {
-        this.emit('process:stderr', { pid, message: msg });
-        this.log('ERROR', `Proc:${pid}`, msg);
-      },
-      readFile: (p: string) => this.fsGetNode(p)?.content,
-      writeFile: (p: string, c: string) => this.fsUpdateFileContent(p, c),
-      listFiles: (p: string) => this.fsGetChildren(p).map(n => n.name),
-      getEnv: (k: string) => ({ OS: 'ObsidianOS_NT', USER: this._user.username }[k]),
-      getTimestamp: () => Date.now(),
-      getResources: () => ({ ...this._resources }),
-      terminate: (exitCode: number = 0) => {
-        this.log('INFO', 'ExecutionEngine', `Process ${pid} terminated with exit code ${exitCode}`);
-        this.terminateProcess(pid);
-      },
-      wait: (ms: number) => new Promise(resolve => setTimeout(resolve, ms)),
-      // Hardware calls
-      ping: () => ({ status: 'online', latency: Math.floor(Math.random() * 5) + 1 }),
-      
-      // --- NATIVE BOOT CALLS ---
-      addBootLog: (m: string) => this.addBootLog(m),
-      setBootPhase: (p: any) => { this.bootPhase = p; },
-      triggerBSOD: (i: any) => this.triggerBSOD(i),
-      finalizeBoot: () => this.finalizeBoot(),
-      
-      // --- DRIVER MGMT ---
-      loadDriverAsync: (path: string) => this.loadDriverAsync(path),
-      
-      // --- SYSTEM MGMT ---
-      allocateMemory: (s: number, n: string) => this.allocateMemory(s, n),
-      createProcess: (n: string, t: string, i: string) => this.createProcess(n, t, i),
-      registerDriver: (e: any) => { this._drivers.set(e.name, e); this.emit('driver:loaded', e); },
-      registerService: (e: any) => { this._services.set(e.name, e); this.emit('service:started', e); },
-      getDriver: (n: string) => this._drivers.get(n),
-      getService: (n: string) => this._services.get(n),
-      getAllServices: () => Array.from(this._services.values()),
-      scanSystemApps: (fs: any, reg: any) => this.scanSystemApps(fs, reg),
-
-      // --- LIBRARY LOADER ---
+      listFiles: (p: string) => this.fsGetChildren(p).map((n: FileSystemNode) => n.name),
+      // ── Process ───────────────────────────────────────────────────────────
+      terminate:       (exitCode: number = 0) => { this.log('INFO', `Proc:${pid}`, `Exit(${exitCode})`); this.terminateProcess(pid); },
+      createProcess:   (n: string, t: string, i: string) => this.createProcess(n, t, i),
+      allocateMemory:  (mb: number, name: string) => this.allocateMemory(mb, name),
+      // ── Signals ───────────────────────────────────────────────────────────
+      signal:          (targetPid: number, sig: Signal) => this.sendSignal(targetPid, sig),
+      onSignal:        (sig: Signal, fn: string) => this.installSignalHandler(pid, sig, 'CUSTOM', fn),
+      ignoreSignal:    (sig: Signal) => this.installSignalHandler(pid, sig, 'IGNORE'),
+      setPriority:     (p: ProcessPriority) => this.setPriority(pid, p),
+      // ── Boot ──────────────────────────────────────────────────────────────
+      addBootLog:   (m: string) => this.addBootLog(m),
+      setBootPhase: (p: any)   => { this.bootPhase = p; },
+      finalizeBoot: ()         => this.finalizeBoot(),
+      triggerBSOD:  (i: any)   => this.triggerBSOD(i),
+      // ── Drivers ───────────────────────────────────────────────────────────
+      loadDriverAsync: (driverPath: string): Promise<boolean> => this.loadDriverAsync(driverPath),
+      registerDriver:  (entry: any) => this.registerDriver({ loadOrder: 0, dependencies: [], ...entry }),
+      registerService: (entry: any) => this.registerService({ dependencies: [], restartCount: 0, ...entry }),
+      // ── Libraries ─────────────────────────────────────────────────────────
       loadLibrary: (dllPath: string): boolean => {
-         // This is used for early boot mgr only, in real processes we load via worker
-         const dllNode = this.fsGetNode(dllPath);
-         if (!dllNode || !dllNode.content) return false;
-         const dllFn = new Function('OS', 'kernel', `"use strict";\n${dllNode.content}`);
-         dllFn(OS, this);
-         return true;
-      }
-    } as Record<string, any>;
+        const dllNode = this.fsGetNode(dllPath);
+        if (!dllNode || !dllNode.content) return false;
+        try {
+          const dllFn = new Function('OS', 'kernel', `"use strict";\n${dllNode.content}`);
+          dllFn(OS, this);
+          return true;
+        } catch (e: any) {
+          this.log('ERROR', 'ExecutionEngine', `loadLibrary failed for ${dllPath}: ${e.message}`);
+          return false;
+        }
+      },
+      // ── Resources ─────────────────────────────────────────────────────────
+      getResources:  () => ({ ...this._resources }),
+      getEnv:        (key: string) => key === 'OS' ? 'ObsidianOS_NT' : key === 'USER' ? this._user.username : '',
+      getTimestamp:  () => Date.now(),
+      ping:          () => ({ status: 'ok', latency: Math.floor(Math.random() * 20) + 1 }),
+      wait:          (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+      // ── Namespaced aliases (for obslogon.exe and other system binaries) ───
+      Registry: {
+        GetValue: (key: string, val: string) => this.regGetValue(`${key}\\${val}`),
+        SetValue: (key: string, val: string, type: any, value: any) => this.regSetValue(`${key}\\${val}`, type, value),
+      },
+      User: {
+        IsAuthenticated: () => !this._isLocked && this._isInitialized,
+      },
+      Process: {
+        Create: (n: string, t: string, i: string) => this.createProcess(n, t, i),
+        Terminate: (p: number) => this.terminateProcess(p),
+      },
+      Kernel: {
+        AddBootLog:   (m: string) => this.addBootLog(m),
+        SetBootPhase: (p: any)   => { this.bootPhase = p; },
+        TriggerBSOD:  (i: any)   => this.triggerBSOD(i),
+        FinalizeBoot: ()         => this.finalizeBoot(),
+      },
+      Utils: {
+        Sleep: (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+      },
+    };
 
-    // ─── RING PRIVILEGE CHECK ───
-    // Critical system processes (Kernel, Boot Manager, Shell) need Ring 0 access 
-    // to initialize the hardware and manage windows directly.
-    const systemFolder = path.includes('System32');
-    const ring0Binaries = [
-       'bootmgr.exe', 'ntoskrnl.exe', 'csrss.exe', 'smss.exe', 
-       'winlogon.exe', 'services.exe', 'lsass.exe', 'explorer.exe',
-       'dwm.exe'
-    ];
-    const isSystemProcess = systemFolder && ring0Binaries.some(bin => path.endsWith(bin));
+    const systemFolder  = path.startsWith('C:\\ObsidianOS\\System32');
+    const sdkFolder     = path.startsWith('C:\\ObsidianOS\\SDK');
+    const progFiles     = path.startsWith('C:\\Program Files');
+    const userDocs      = path.startsWith('C:\\Users');
+    const ring0Binaries = ['bootmgr.obx', 'obslogon.obx', 'services.obx', 'lsass.obx'];
+
+    // Run on main thread (with full kernel/DOM access) for:
+    //  • ring-0 system binaries (bootmgr, lsass…)
+    //  • SDK examples & user scripts (need OS.User32 / OS.GDI32 / kernel.emit)
+    //  • anything in Program Files or user Documents
+    const isSystemProcess =
+      (systemFolder && ring0Binaries.some(bin => path.endsWith(bin))) ||
+      sdkFolder || progFiles || userDocs;
 
     if (isSystemProcess) {
-      this.log('INFO', 'ExecutionEngine', `Spawning System Process ${node.name} in Ring 0 (Privileged)`);
       try {
          const sdkNode = this.fsGetNode('C:\\ObsidianOS\\SDK\\lib\\obsidian.js');
          const sdkCode = sdkNode?.content || '';
-         // Auto-Link DLLs for Kernel local processes
-         OS.loadLibrary('C:\\ObsidianOS\\System32\\kernel32.dll');
-         OS.loadLibrary('C:\\ObsidianOS\\System32\\gdi32.dll');
-         OS.loadLibrary('C:\\ObsidianOS\\System32\\user32.dll');
+         const isBootMgr = path.endsWith('bootmgr.obx');
+         const isSdkApp  = sdkFolder || progFiles || userDocs;
 
-         const scriptBody = `"use strict";\n${sdkCode};\n(async () => {\n${node.content}\n})().catch(e => {\n  kernel.log('ERROR', 'ExecutionEngine', 'System Process Error: ' + e.message);\n  kernel.triggerBSOD({ stopCode: 'CRITICAL_PROCESS_DIED', technicalInfo: e.message });\n});`;
-         const binaryScript = new Function('OS', 'kernel', scriptBody);
-         binaryScript(OS, this);
-         return; 
+         // bootmgr gets no SDK; SDK/user apps get SDK + UI DLLs pre-loaded
+         let codeToRun = isBootMgr ? node.content : sdkCode + '\n' + node.content;
+
+         // For SDK/user apps, auto-load user32.dll and gdi32.dll so OS.User32 / OS.GDI32 are available
+         if (isSdkApp) {
+           const user32 = this.fsGetNode('C:\\ObsidianOS\\System32\\user32.dll');
+           const gdi32  = this.fsGetNode('C:\\ObsidianOS\\System32\\gdi32.dll');
+           const prelude = [user32?.content, gdi32?.content].filter(Boolean).join('\n');
+           codeToRun = sdkCode + '\n' + prelude + '\n' + node.content;
+         }
+
+         // Wrap in async IIFE so top-level await works inside the binary
+         const asyncWrapper = new Function('OS', 'kernel', `
+            "use strict";
+            return (async () => {
+              try {
+                ${codeToRun}
+              } catch(e) {
+                kernel.log("ERROR", "ExecutionEngine", "Runtime Error in [${node.name}]: " + e.message);
+              }
+            })();
+         `);
+
+         // Fire-and-forget — the binary calls OS.terminate() or OS.finalizeBoot() when done
+         asyncWrapper(OS, this).catch((e: any) => {
+           this.log('ERROR', 'ExecutionEngine', `Unhandled rejection in [${node.name}]: ${e.message}`);
+           // Deliver SIGABRT for unhandled promise rejections
+           this.sendSignal(pid, 'SIGABRT');
+         });
+         return;
       } catch (e: any) {
-         this.log('ERROR', 'ExecutionEngine', `System Process ${node.name} failed: ${e.message}`);
+         this.log('ERROR', 'ExecutionEngine', `System Process Load Failed: ${e.message}`);
          this.terminateProcess(pid);
          return;
       }
     }
 
+    // --- OSL SCRIPT EXECUTION ---
+    if (path.endsWith('.osl')) {
+      try {
+        const source = node.content;
+        const lexer = new Lexer(source);
+        const tokens = lexer.tokenize();
+        const parser = new Parser(tokens);
+        const ast = parser.parse();
+        const interpreter = new Interpreter();
+        
+        // Execute asynchronously
+        interpreter.interpret(ast).then(() => {
+          this.log('INFO', 'OSL', `Script ${node.name} finished execution.`);
+          this.terminateProcess(pid);
+        }).catch(err => {
+          this.log('ERROR', 'OSL', `Runtime Error in ${node.name}: ${err.message}`);
+          this.terminateProcess(pid);
+        });
+        return;
+      } catch (err: any) {
+        this.log('ERROR', 'OSL', `Compile Error in ${node.name}: ${err.message}`);
+        this.terminateProcess(pid);
+        return;
+      }
+    }
+
     try {
-      // ─── OBSIDIANOS WORKER ARCHITECTURE ───
-      // We wrap the process into a dedicated hardware thread (Web Worker)
       const workerBlob = new Blob([`
         "use strict";
         let OS = {};
         let __callHandlers = new Map();
-
-        // The SYSCALL Bridge
         function syscall(name, ...args) {
            return new Promise((resolve) => {
               const callId = Math.random().toString(36).substring(7);
@@ -1090,223 +1250,88 @@ class Kernel {
               self.postMessage({ type: 'SYSCALL', name, args, callId });
            });
         }
-
-        // Initialize OS object with Proxies to the Kernel
         self.onmessage = async (e) => {
            const { type, data, callId } = e.data;
-           
            if (type === 'BOOT') {
               const { pid, name, code, sdkCode, dlls } = data;
               self.pid = pid;
-              
-              // Internal performance monitor
-              self.onmessage_original = self.onmessage;
-              self.onmessage = async (e) => {
-                 if(e.data.type === 'PING') {
-                    self.postMessage({ type: 'PONG', callId: e.data.callId });
-                    return;
-                 }
-                 if(self.onmessage_original) self.onmessage_original(e);
-              };
-
-              // Base OS API
               OS = {
-                 pid: pid,
+                 pid,
                  print: (m) => syscall('print', m),
                  error: (m) => syscall('error', m),
                  terminate: (c) => syscall('terminate', c),
                  readFile: (p) => syscall('readFile', p),
                  writeFile: (p,c) => syscall('writeFile', p, c),
                  listFiles: (p) => syscall('listFiles', p),
-                 getEnv: (k) => syscall('getEnv', k),
                  wait: (m) => new Promise(r => setTimeout(r, m)),
-                 getResources: () => syscall('getResources'),
                  loadLibrary: async (p) => {
                     const content = await syscall('readFile', p);
                     if (!content) return false;
-                    try {
-                       const fn = new Function('OS', 'kernel', content);
-                       fn(OS, { emit: (name, data) => self.postMessage({ type: 'EMIT', name, data: Object.assign({ pid: self.pid }, data) }) });
-                       return true;
-                    } catch(e) { return false; }
+                    new Function('OS', 'kernel', content)(OS, { emit: (name, data) => self.postMessage({ type: 'EMIT', name, data }) });
+                    return true;
                  }
               };
-
-              // Export to global scope
-              self.OS = OS;
-              self.kernel = { 
-                 emit: (name, d) => self.postMessage({ type: 'EMIT', name, data: Object.assign({ pid: self.pid }, d) }),
-                 on: (name, cb) => {
-                     // We need a way to receive events back in worker
-                     if(!self.__listeners) self.__listeners = {};
-                     if(!self.__listeners[name]) self.__listeners[name] = [];
-                     self.__listeners[name].push(cb);
-                 }
-              };
-
-              // Inject SDK
-              if(sdkCode) {
-                 try { new Function('OS', 'kernel', sdkCode)(OS, self.kernel); } catch(e){}
-              }
-
-              // Auto-load DLLs
-              for(const dllPath of dlls) {
-                 await OS.loadLibrary(dllPath);
-              }
-
-              // EXECUTE BINARY
+              if(sdkCode) new Function('OS', 'kernel', sdkCode)(OS, { emit: (n,d) => self.postMessage({ type: 'EMIT', name: n, data: d }) });
+              for(const dll of dlls) await OS.loadLibrary(dll);
               try {
-                 const binaryFn = new Function('OS', 'kernel', 'return (async () => { ' + code + ' })();');
-                 await binaryFn(OS, self.kernel);
-              } catch(err) {
-                 OS.error("Runtime Error in Worker: " + err.message);
-                 OS.terminate(1);
-              }
+                 await new Function('OS', 'kernel', 'return (async () => { ' + code + ' })();')(OS, {});
+              } catch(err) { OS.error("Worker Error: " + err.message); OS.terminate(pid); }
            }
-
            if (type === 'SYSCALL_RES') {
-              const handler = __callHandlers.get(callId);
-              if (handler) {
-                 handler(data);
-                 __callHandlers.delete(callId);
-              }
-           }
-
-           if (type === 'EVENT') {
-              if (self.__listeners && self.__listeners[data.name]) {
-                 self.__listeners[data.name].forEach(cb => cb(data.data));
-              }
+              const h = __callHandlers.get(callId);
+              if (h) { h(data); __callHandlers.delete(callId); }
            }
         };
       `], { type: 'application/javascript' });
 
       const worker = new Worker(URL.createObjectURL(workerBlob));
-      
-      // Update process info with the worker instance
-      const procInfo = this._processes.get(pid);
-      if (procInfo) {
-         (procInfo as any).worker = worker;
-      }
+      (proc as any).worker = worker;
 
-      // Handle messages from the isolated Worker
-      worker.onmessage = async (e) => {
+      worker.onmessage = (e) => {
          const { type, name, args, callId, data } = e.data;
-
          if (type === 'SYSCALL') {
-            let result = null;
-            // Map worker syscalls to Kernel methods
+            let res = null;
             if (name === 'print') this.log('INFO', `Proc:${pid}`, args[0]);
             if (name === 'error') this.log('ERROR', `Proc:${pid}`, args[0]);
             if (name === 'terminate') this.terminateProcess(pid);
-            if (name === 'readFile') result = this.fsGetNode(args[0])?.content;
+            if (name === 'readFile') res = this.fsGetNode(args[0])?.content;
             if (name === 'writeFile') this.fsUpdateFileContent(args[0], args[1]);
-            if (name === 'listFiles') result = this.fsGetChildren(args[0]).map(n => n.name);
-            if (name === 'getEnv') result = { OS: 'ObsidianOS_NT', USER: this._user.username }[args[0] as string];
-            if (name === 'getResources') result = { ...this._resources };
-
-            worker.postMessage({ type: 'SYSCALL_RES', callId, data: result });
+            if (name === 'listFiles') res = this.fsGetChildren(args[0]).map(n => n.name);
+            worker.postMessage({ type: 'SYSCALL_RES', callId, data: res });
          }
-
-         if (type === 'EMIT') {
-             // Forward events from process to kernel bus (GDI, etc)
-             this.emit(name, data);
-         }
+         if (type === 'EMIT') this.emit(name, data);
       };
 
-      // Handle worker errors
-      worker.onerror = (err) => {
-         this.log('ERROR', 'ExecutionEngine', `Worker Thread Error (PID:${pid}): ${err.message}`);
-         this.terminateProcess(pid);
-      };
+      worker.onerror = (err) => { this.log('ERROR', 'ExecutionEngine', `Worker Error: ${err.message}`); this.terminateProcess(pid); };
 
-      // Prepare environment
       const sdkNode = this.fsGetNode('C:\\ObsidianOS\\SDK\\lib\\obsidian.js');
-      const sdkCode = sdkNode?.content || '';
-      const dlls = [
-         'C:\\ObsidianOS\\System32\\kernel32.dll',
-         'C:\\ObsidianOS\\System32\\gdi32.dll',
-         'C:\\ObsidianOS\\System32\\user32.dll'
-      ];
+      worker.postMessage({ type: 'BOOT', data: { pid, name: node.name, code: node.content, sdkCode: sdkNode?.content, dlls: ['C:\\ObsidianOS\\System32\\kernel32.dll'] } });
 
-      // START THE PROCESS ENGINE
-      worker.postMessage({
-         type: 'BOOT',
-         data: {
-            pid,
-            name: node.name,
-            code: node.content || "",
-            sdkCode,
-            dlls
-         }
-      });
-
-      // --- CPU MONITORING ENGINE ---
-      const monitorInterval = setInterval(() => {
-          if (!worker) return;
-          const start = performance.now();
-          const callId = Math.random().toString(36).substring(7);
-          
-          const pongHandler = (e: MessageEvent) => {
-              if (e.data.type === 'PONG' && e.data.callId === callId) {
-                  const latency = performance.now() - start;
-                  // Convert latency to CPU Load: 2ms=1%, 100ms=50%, 200ms+=100%
-                  const load = Math.min(100, Math.max(0.1, latency * 0.5));
-                  this.updateProcessCpu(pid, load);
-                  worker.removeEventListener('message', pongHandler);
-              }
-          };
-          
-          worker.addEventListener('message', pongHandler);
-          worker.postMessage({ type: 'PING', callId });
-
-          // Timeout if worker is totally frozen
-          setTimeout(() => {
-              if (this._processes.has(pid)) {
-                 const proc = this._processes.get(pid);
-                 if (proc && proc.cpuUsage === 0) this.updateProcessCpu(pid, 100);
-              }
-          }, 1000);
-      }, 2000);
-
-      // Special handling: forward kernel events back to this worker
-      // This is crucial for GDI/User32 interactions
-      const forwardEvent = (name: string, data: any) => {
-          if (data && data.pid === pid) return; // Don't loop back
-          worker.postMessage({ type: 'EVENT', data: { name, data } });
-      };
-
-      const eventNames = ['user32:mouse', 'user32:dom_event', 'user32:set_mode'];
-      const unbinds = eventNames.map(name => this.on(name, (d) => {
-          forwardEvent(name, d);
-      }));
-      
-      unbinds.push(() => clearInterval(monitorInterval));
-
-      // Store unbinds in process info to cleanup on terminate
-      if (proc) (proc as any)._unbinds = unbinds;
-
-    } catch (outerError: any) {
-      this.log('ERROR', 'ExecutionEngine', `Critical failure spawning process ${pid}: ${outerError.message}`);
+    } catch (err: any) {
+      this.log('ERROR', 'ExecutionEngine', `Spawn failed: ${err.message}`);
       this.terminateProcess(pid);
     }
   }
 
   // Processes that must never be terminated — killing them triggers BSOD
   private static readonly CRITICAL_PROCESSES: Record<string, { stopCode: string; component: string; technical: string; bugCheck: string }> = {
-    'System':       { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'ntoskrnl.exe', technical: 'The System kernel process was terminated.',                                          bugCheck: '0x000000EF' },
-    'smss.exe':     { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'smss.exe',     technical: 'Session Manager Subsystem process died.',                                            bugCheck: '0x000000EF' },
-    'csrss.exe':    { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'csrss.exe',    technical: 'Client Server Runtime Process died.',                                                bugCheck: '0x000000EF' },
-    'wininit.exe':  { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'wininit.exe',  technical: 'Windows Start-Up Application stopped.',                                             bugCheck: '0x000000EF' },
-    'lsass.exe':    { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'lsass.exe',    technical: 'Local Security Authority Process encountered a critical error.',                    bugCheck: '0x000000EF' },
-    'services.exe': { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'services.exe', technical: 'Services and Controller App stopped.',                                              bugCheck: '0x000000EF' },
-    'dwm.exe':      { stopCode: 'DESKTOP_WINDOW_MANAGER_DIED', component: 'dwm.exe',      technical: 'Desktop Window Manager (DWM) encountered a fatal error and could not be restarted.', bugCheck: '0x000000EF' },
+    'System':        { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'ntoskrnl.obx', technical: 'The System kernel process was terminated.',                                           bugCheck: '0x000000EF' },
+    'smss.obx':     { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'smss.obx',     technical: 'Session Manager Subsystem process died.',                                             bugCheck: '0x000000EF' },
+    'csrss.obx':    { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'csrss.obx',    technical: 'Client Server Runtime Process died.',                                                 bugCheck: '0x000000EF' },
+    'wininit.obx':  { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'wininit.obx',  technical: 'Windows Start-Up Application stopped.',                                              bugCheck: '0x000000EF' },
+    'lsass.obx':    { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'lsass.obx',    technical: 'Local Security Authority Process encountered a critical error.',                     bugCheck: '0x000000EF' },
+    'services.obx': { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'services.obx', technical: 'Services and Controller App stopped.',                                               bugCheck: '0x000000EF' },
+    'dwm.obx':      { stopCode: 'DESKTOP_WINDOW_MANAGER_DIED', component: 'dwm.obx',      technical: 'Desktop Window Manager (DWM) encountered a fatal error and could not be restarted.', bugCheck: '0x000000EF' },
   };
 
   terminateProcess(pid: number) {
     const proc = this._processes.get(pid);
     if (!proc) return;
 
-    // Cleanup Worker if it exists (Real Multitasking Isolation)
+    // Remove from scheduler run queues
+    this._removeFromRunQueues(pid);
+
+    // Cleanup Worker if it exists
     if ((proc as any).worker) {
        (proc as any).worker.terminate();
        this.log('INFO', 'ExecutionEngine', `Worker for PID:${pid} terminated.`);
@@ -1362,7 +1387,8 @@ class Kernel {
   suspendProcess(pid: number) {
     const proc = this._processes.get(pid);
     if (!proc) return;
-    const updated: Process = { ...proc, status: 'suspended' };
+    this._removeFromRunQueues(pid);
+    const updated: Process = { ...proc, state: 'BLOCKED', status: 'suspended' };
     this._processes.set(pid, updated);
     this.emit('process:updated', updated);
   }
@@ -1370,8 +1396,9 @@ class Kernel {
   resumeProcess(pid: number) {
     const proc = this._processes.get(pid);
     if (!proc) return;
-    const updated: Process = { ...proc, status: 'running' };
+    const updated: Process = { ...proc, state: 'READY', status: 'running' };
     this._processes.set(pid, updated);
+    this._addToRunQueue(updated);
     this.emit('process:updated', updated);
   }
 
@@ -1389,6 +1416,271 @@ class Kernel {
     const updated: Process = { ...proc, memoryUsage: memory };
     this._processes.set(pid, updated);
     this.emit('process:updated', updated);
+  }
+
+  // ========== Scheduler ==========
+  startScheduler() {
+    if (this._schedulerInterval) return;
+    this._schedulerInterval = setInterval(() => this._schedulerTick(), 100);
+    this.log('INFO', 'Scheduler', 'Round-Robin scheduler started');
+  }
+
+  stopScheduler() {
+    if (this._schedulerInterval) {
+      clearInterval(this._schedulerInterval);
+      this._schedulerInterval = null;
+    }
+  }
+
+  private _schedulerTick() {
+    const now = Date.now();
+    const weights: Record<ProcessPriority, number> = {
+      REALTIME: 32, HIGH: 16, ABOVE_NORMAL: 8, NORMAL: 4, BELOW_NORMAL: 2, IDLE: 1,
+    };
+
+    const active: Process[] = [];
+    let totalWeight = 0;
+
+    for (const priority of Kernel.PRIORITY_ORDER) {
+      const q = this._runQueues.get(priority)!;
+      for (const pid of q) {
+        const proc = this._processes.get(pid);
+        if (!proc || proc.state === 'BLOCKED' || proc.state === 'SLEEPING' || proc.state === 'ZOMBIE') continue;
+        active.push(proc);
+        totalWeight += weights[priority];
+      }
+    }
+
+    if (active.length === 0) {
+      this._resources.cpuUsage = 0;
+      this.emit('cpuChange', this._resources);
+      return;
+    }
+
+    // Base system load: idle system sits around 3-8%, busy system scales up
+    // Each process gets a slice of the total system load, not additive CPU
+    const baseLoad = Math.min(15, 2 + active.length * 0.4);
+    const organicNoise = (Math.random() - 0.5) * 2; // ±1%
+    const systemLoad = Math.max(0, Math.min(100, baseLoad + organicNoise));
+
+    for (const proc of active) {
+      const share = weights[proc.priority] / totalWeight;
+      // Per-process CPU = its share of system load + tiny individual noise
+      const procNoise = proc.pid < 10
+        ? Math.random() * 0.1   // system processes: very stable
+        : Math.random() * 0.5;  // user processes: slight variation
+      const rawCpu = systemLoad * share + procNoise;
+
+      // Exponential moving average — smooths out spikes
+      const alpha = 0.25;
+      const newCpu = parseFloat((alpha * rawCpu + (1 - alpha) * proc.cpuUsage).toFixed(2));
+
+      const quantum = Kernel.QUANTUM_MS[proc.priority];
+      const newQuantumUsed = (proc.quantumUsed + 100) % quantum;
+
+      const updated: Process = {
+        ...proc,
+        state: 'RUNNING',
+        status: 'running',
+        cpuUsage: newCpu,
+        quantumUsed: newQuantumUsed,
+        totalCpuTime: proc.totalCpuTime + 100 * share,
+        lastScheduled: now,
+      };
+      this._processes.set(proc.pid, updated);
+
+      // Rotate queue after quantum expires
+      if (newQuantumUsed === 0) {
+        const q = this._runQueues.get(proc.priority)!;
+        const i = q.indexOf(proc.pid);
+        if (i !== -1) { q.splice(i, 1); q.push(proc.pid); }
+      }
+
+      if (updated.pendingSignals.length > 0) this._deliverSignals(updated.pid);
+    }
+
+    // System CPU = weighted average of all process CPUs (not sum)
+    let weightedSum = 0;
+    for (const proc of active) {
+      const p = this._processes.get(proc.pid)!;
+      weightedSum += p.cpuUsage * (weights[p.priority] / totalWeight);
+    }
+    this._resources.cpuUsage = Math.min(100, parseFloat(weightedSum.toFixed(1)));
+    this.emit('cpuChange', this._resources);
+    this.emit('scheduler:tick', { processes: this.getProcesses(), cpuUsage: this._resources.cpuUsage });
+  }
+
+  setPriority(pid: number, priority: ProcessPriority) {
+    const proc = this._processes.get(pid);
+    if (!proc) return;
+    this._removeFromRunQueues(pid);
+    const updated: Process = { ...proc, priority, quantum: Kernel.QUANTUM_MS[priority] };
+    this._processes.set(pid, updated);
+    this._addToRunQueue(updated);
+    this.log('INFO', 'Scheduler', `PID:${pid} priority → ${priority}`);
+    this.emit('process:updated', updated);
+  }
+
+  getProcessPriority(pid: number): ProcessPriority | null {
+    return this._processes.get(pid)?.priority ?? null;
+  }
+
+  // ========== Signal System ==========
+
+  sendSignal(pid: number, signal: Signal): boolean {
+    const proc = this._processes.get(pid);
+    if (!proc) return false;
+    if (signal === 'SIGKILL') {
+      this.log('INFO', 'Signal', `SIGKILL → PID:${pid} (${proc.name})`);
+      this._handleSignalDefault(pid, signal);
+      return true;
+    }
+    const updated: Process = { ...proc, pendingSignals: [...proc.pendingSignals, signal] };
+    this._processes.set(pid, updated);
+    this.log('DEBUG', 'Signal', `${signal} queued for PID:${pid}`);
+    this.emit('process:signal', { pid, signal });
+    return true;
+  }
+
+  installSignalHandler(pid: number, signal: Signal, handler: 'DEFAULT' | 'IGNORE' | 'CUSTOM', customFn?: string) {
+    const proc = this._processes.get(pid);
+    if (!proc) return;
+    this._processes.set(pid, {
+      ...proc,
+      signalHandlers: { ...proc.signalHandlers, [signal]: { signal, handler, customFn } },
+    });
+  }
+
+  private _deliverSignals(pid: number) {
+    const proc = this._processes.get(pid);
+    if (!proc || proc.pendingSignals.length === 0) return;
+    const [signal, ...rest] = proc.pendingSignals;
+    const handlerDef = proc.signalHandlers[signal];
+    this._processes.set(pid, { ...proc, pendingSignals: rest });
+
+    if (handlerDef?.handler === 'IGNORE') return;
+    if (handlerDef?.handler === 'CUSTOM') {
+      this.emit('process:signal:deliver', { pid, signal, fn: handlerDef.customFn });
+      return;
+    }
+    this._handleSignalDefault(pid, signal);
+  }
+
+  private _handleSignalDefault(pid: number, signal: Signal) {
+    const proc = this._processes.get(pid);
+    if (!proc) return;
+    switch (signal) {
+      case 'SIGTERM': case 'SIGINT': case 'SIGKILL': case 'SIGABRT':
+        this.log('INFO', 'Signal', `PID:${pid} (${proc.name}) terminated by ${signal}`);
+        this.terminateProcess(pid);
+        break;
+      case 'SIGSEGV':
+        this.log('ERROR', 'Signal', `PID:${pid} (${proc.name}) — Segmentation Fault`);
+        this.emit('process:crash', { pid, signal, message: 'Segmentation fault (core dumped)' });
+        this._writeCoreFile(pid, signal);
+        this.terminateProcess(pid);
+        break;
+      case 'SIGFPE':
+        this.log('ERROR', 'Signal', `PID:${pid} (${proc.name}) — Arithmetic Exception`);
+        this.emit('process:crash', { pid, signal, message: 'Floating point exception' });
+        this._writeCoreFile(pid, signal);
+        this.terminateProcess(pid);
+        break;
+      case 'SIGILL':
+        this.log('ERROR', 'Signal', `PID:${pid} (${proc.name}) — Illegal Instruction`);
+        this.emit('process:crash', { pid, signal, message: 'Illegal instruction' });
+        this._writeCoreFile(pid, signal);
+        this.terminateProcess(pid);
+        break;
+      case 'SIGALRM':
+        this.emit('process:signal:deliver', { pid, signal });
+        break;
+      default: break; // SIGCHLD, SIGUSR1, SIGUSR2 — default ignore
+    }
+  }
+
+  private _writeCoreFile(pid: number, signal: Signal) {
+    const proc = this._processes.get(pid);
+    if (!proc) return;
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const content = JSON.stringify({ pid, signal, name: proc.name, cpuUsage: proc.cpuUsage, memoryUsage: proc.memoryUsage, totalCpuTime: proc.totalCpuTime, timestamp: Date.now() }, null, 2);
+    this.fsCreateFile('C:\\ObsidianOS\\System32\\Minidump', `core_${proc.name}_${pid}_${ts}.dmp`, content, 'dmp');
+  }
+
+  // ========== Partition Table ==========
+
+  private _initPartitionTable() {
+    const saved = this.regGetValue('HKEY_LOCAL_MACHINE\\SYSTEM\\Disk\\PartitionTable');
+    if (saved && typeof saved === 'string') {
+      try {
+        this._partitionTable = JSON.parse(saved);
+        const bc = this.regGetValue('HKEY_LOCAL_MACHINE\\SYSTEM\\Disk\\BootConfig');
+        if (bc && typeof bc === 'string') this._bootConfig = JSON.parse(bc);
+        return;
+      } catch { /* fall through */ }
+    }
+    this._partitionTable = this._buildDefaultPartitionTable();
+    this._bootConfig     = this._buildDefaultBootConfig();
+    this._persistPartitionTable();
+  }
+
+  private _buildDefaultPartitionTable(): PartitionTable {
+    return {
+      scheme: 'GPT',
+      diskSizeMB: 256000,
+      diskLabel: 'ObsidianOS Disk 0',
+      guid: uuidv4(),
+      partitions: [
+        { index: 0, label: 'EFI System Partition', driveLetter: '', type: 'EFI',      bootable: true,  startLBA: 2048,      sizeMB: 512,    usedMB: 4,     filesystem: '',             guid: uuidv4() },
+        { index: 1, label: 'ObsidianOS',           driveLetter: 'C', type: 'NTFS',    bootable: false, startLBA: 1050624,   sizeMB: 204800, usedMB: 42000, filesystem: 'C:',           guid: uuidv4() },
+        { index: 2, label: 'Recovery',             driveLetter: '',  type: 'RECOVERY',bootable: false, startLBA: 419432448, sizeMB: 1024,   usedMB: 512,   filesystem: 'C:\\Recovery', guid: uuidv4() },
+      ],
+      gpt: { headerLBA: 1, backupLBA: 499999999, firstUsableLBA: 34, lastUsableLBA: 499999966 },
+    };
+  }
+
+  private _buildDefaultBootConfig(): BootConfig {
+    return {
+      scheme: 'UEFI',
+      timeout: 5,
+      defaultEntry: 'obsidianos',
+      entries: [
+        { id: 'obsidianos', label: 'ObsidianOS Professional 24H2',      partition: 'C', kernelPath: 'C:\\ObsidianOS\\System32\\ntoskrnl.obx', cmdline: '/fastdetect /noexecute=OptIn', isDefault: true,  timeout: 5 },
+        { id: 'recovery',   label: 'ObsidianOS Recovery Environment',   partition: 'C', kernelPath: 'C:\\Recovery\\winre.obx',                cmdline: '/recovery',                   isDefault: false },
+      ],
+    };
+  }
+
+  private _persistPartitionTable() {
+    if (!this._partitionTable) return;
+    this.regSetValue('HKEY_LOCAL_MACHINE\\SYSTEM\\Disk\\PartitionTable', 'REG_SZ', JSON.stringify(this._partitionTable));
+    if (this._bootConfig) this.regSetValue('HKEY_LOCAL_MACHINE\\SYSTEM\\Disk\\BootConfig', 'REG_SZ', JSON.stringify(this._bootConfig));
+  }
+
+  getPartitionTable(): PartitionTable | null { return this._partitionTable; }
+  getBootConfig(): BootConfig | null { return this._bootConfig; }
+
+  getPartition(driveLetter: string): PartitionEntry | null {
+    return this._partitionTable?.partitions.find(p => p.driveLetter === driveLetter) ?? null;
+  }
+
+  updatePartitionUsage(driveLetter: string, usedMB: number) {
+    if (!this._partitionTable) return;
+    const p = this._partitionTable.partitions.find(p => p.driveLetter === driveLetter);
+    if (p) { p.usedMB = usedMB; this._persistPartitionTable(); this.emit('disk:partitionUpdate', this._partitionTable); }
+  }
+
+  addBootEntry(entry: BootEntry) {
+    if (!this._bootConfig) return;
+    this._bootConfig.entries.push(entry);
+    this._persistPartitionTable();
+  }
+
+  setDefaultBootEntry(id: string) {
+    if (!this._bootConfig) return;
+    this._bootConfig.defaultEntry = id;
+    this._bootConfig.entries.forEach(e => { e.isDefault = e.id === id; });
+    this._persistPartitionTable();
   }
 
   getProcess(pid: number): Process | undefined {
@@ -1458,12 +1750,30 @@ class Kernel {
 
   fsCreateDirectory(parentPath: string, name: string) {
     const path = `${parentPath}\\${name}`;
+    if (this._filesystem.has(path)) return; // Já existe
     const node = makeDir(path, name, parentPath);
     this._filesystem.set(path, node);
     if (this._diskDriver) {
       this._diskDriver.createDirectory(path).then(() => this._diskDriver!.writeMeta(node));
     }
     this._persistFileSystem();
+  }
+
+  // Cria a estrutura de pastas para um novo usuário
+  sysCreateUserHome(username: string) {
+    const root = `C:\\Users\\${username}`;
+    this.fsCreateDirectory('C:\\Users', username);
+    this.fsCreateDirectory(root, 'Desktop');
+    this.fsCreateDirectory(root, 'Documents');
+    this.fsCreateDirectory(root, 'Downloads');
+    this.fsCreateDirectory(root, 'Pictures');
+    this.fsCreateDirectory(root, 'Music');
+    this.fsCreateDirectory(root, 'Videos');
+    this.fsCreateDirectory(root, 'AppData');
+    this.fsCreateDirectory(`${root}\\AppData`, 'Local');
+    this.fsCreateDirectory(`${root}\\AppData`, 'Roaming');
+    
+    this.log('INFO', 'Kernel', `Estrutura de diretórios criada para o usuário: ${username}`);
   }
 
   fsDeleteNode(path: string) {

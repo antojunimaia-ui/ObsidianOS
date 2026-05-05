@@ -13,19 +13,19 @@ export default function HwndRenderer({ windowId }: { windowId: string }) {
   const startedRef = useRef(false);
   const [procId, setProcId] = useState<number | null>(null);
 
-  // Efeito principal: Configura listeners E dispara binário
+  // Efeito principal: Configura listeners E dispara binário — roda só uma vez por janela
   useEffect(() => {
     const win = getWindow(windowId);
     if (!win || !win.processId) return;
 
     setDimensions({ width: win.width || 800, height: win.height || 600 });
-    
+
     const currentProcId = win.processId;
-    if (!procId) setProcId(currentProcId);
+    setProcId(currentProcId);
 
     // Configura os escutadores antes de iniciar o processo
     const offGdiDraw = kernel.on('gdi:draw', (data: { pid: number, commands: any[] }) => {
-      if (data.pid !== currentProcId || isRenderMode !== 'canvas') return;
+      if (data.pid !== currentProcId) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
@@ -50,7 +50,7 @@ export default function HwndRenderer({ windowId }: { windowId: string }) {
         setIsRenderMode(data.mode);
     });
 
-    // Se ainda não iniciou, inicia agora (SÍNCRONO após ter bindado listeners)
+    // Inicia o binário uma única vez
     if (!startedRef.current && win.params?.binaryPath) {
        startedRef.current = true;
        kernel.executeBinary(currentProcId, win.params.binaryPath);
@@ -61,7 +61,8 @@ export default function HwndRenderer({ windowId }: { windowId: string }) {
       offDomUpdate();
       offModeChange();
     };
-  }, [windowId, getWindow, isRenderMode]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [windowId]); // só re-executa se a janela mudar — isRenderMode fora das deps
 
   // Transmitindo input de usuário devolta para o Processo
   const handleMouseEvent = (e: React.MouseEvent, type: string) => {

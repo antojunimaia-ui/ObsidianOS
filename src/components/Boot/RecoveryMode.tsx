@@ -283,7 +283,7 @@ function RecoveryTerminal({ onClose }: { onClose: () => void }) {
         break;
 
       default: {
-        const binaryName = command.endsWith('.exe') ? command : `${command}.exe`;
+        const binaryName = command.endsWith('.obx') ? command : `${command}.obx`;
         const isAbs = binaryName.startsWith('C:');
         const searchPaths = isAbs ? [binaryName] : [`${currentPath}\\${binaryName}`, `C:\\ObsidianOS\\System32\\${binaryName}`];
         let foundPath = '';

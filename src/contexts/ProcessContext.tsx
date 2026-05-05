@@ -14,6 +14,7 @@ interface ProcessContextType {
 
 const ProcessContext = createContext<ProcessContextType | undefined>(undefined);
 
+// @refresh reset
 export function ProcessProvider({ pid, children }: { pid: number; children: React.ReactNode }) {
   const { getProcess, terminateProcess } = useProcessManager();
   const process = getProcess(pid);

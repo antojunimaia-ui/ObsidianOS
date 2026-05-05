@@ -90,7 +90,7 @@ export default function App() {
       // Ctrl+Shift+Escape = Task Manager
       if (e.ctrlKey && e.shiftKey && e.key === 'Escape') {
         e.preventDefault();
-        const pid = createProcess('taskmgr.exe', 'Gerenciador de Tarefas', '📊');
+        const pid = createProcess('taskmgr.obx', 'Gerenciador de Tarefas', '📊');
         openWindow({
           appId: 'task-manager',
           title: 'Gerenciador de Tarefas',
@@ -109,7 +109,7 @@ export default function App() {
   // DEEP REALISM: Watch critical system files & processes
   const gdi32 = useFileSystem(s => !!s.nodes['C:\\ObsidianOS\\System32\\gdi32.dll']);
   const user32 = useFileSystem(s => !!s.nodes['C:\\ObsidianOS\\System32\\user32.dll']);
-  const explorerRunning = useProcessManager(s => s.processes.some(p => p.name === 'explorer.exe'));
+  const explorerRunning = useProcessManager(s => s.processes.some(p => p.name === 'explorer.obx'));
 
   // GDI32 Failure Corrupts the screen visually
   useEffect(() => {
@@ -149,27 +149,14 @@ export default function App() {
     }
   }, [user32, bootPhase]);
 
-  // DEEP REALISM: CPU/RAM monitorados via processos
+  // DEEP REALISM: CPU/RAM monitorados via scheduler (kernel.startScheduler() called on finalizeBoot)
+  // No manual interval needed here — the kernel scheduler emits cpuChange every 100ms
   const processes = useProcessManager(s => s.processes);
-
-  // RESOURCE MONITORING LOOP — CPU calculado a partir dos processos
-  // RAM não precisa mais ser sincronizada: o kernel gerencia via allocateMemory/freeMemory
-  useEffect(() => {
-    if (bootPhase !== 'desktop' || isBSOD) return;
-
-    const interval = setInterval(() => {
-      const totalCpu = processes.reduce((sum, p) => sum + p.cpuUsage, 0);
-      const organicCpu = Math.min(100, totalCpu + (Math.random() * 2));
-      kernel.updateCpuUsage(organicCpu);
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, [processes, bootPhase, isBSOD]);
 
   // Start Shell Components as Windows (DEEP REALISM: Taskbar as a Window)
   useEffect(() => {
     if (bootPhase === 'desktop' && explorerRunning) {
-      const proc = processes.find(p => p.name === 'explorer.exe');
+      const proc = processes.find(p => p.name === 'explorer.obx');
       if (proc) {
         // Only open if not already opened (check registry or process windows)
         const hasTaskbar = kernel.getWindows().some(w => w.appId === 'taskbar');

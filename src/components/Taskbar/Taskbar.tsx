@@ -51,7 +51,7 @@ export default function Taskbar() {
         label: 'Gerenciador de Tarefas', 
         icon: '📊', 
         onClick: () => {
-          const pid = createProcess('taskmgr.exe', 'Gerenciador de Tarefas', '📊');
+          const pid = createProcess('taskmgr.obx', 'Gerenciador de Tarefas', '📊');
           openWindow({
             appId: 'task-manager',
             title: 'Gerenciador de Tarefas',

@@ -53,14 +53,16 @@ export default function SetupWizard() {
     useUserStore.setState({ currentUser: newProfile, isAuthenticated: false });
 
     // 3. Update Kernel's user state (This is critical for LockScreen to see the right user)
-    // We access the private _user via any for this system update
     (kernel as any)._user = newProfile;
+    (kernel as any).sysCreateUserHome(username);
     (kernel as any)._persistSystemState();
 
     // 4. Set the chosen theme
     setTheme({ accentColor });
 
-    // 5. Mark setup as completed
+    // 5. Mark setup as completed — zero the registry flag so it never shows again
+    kernel.regSetValue('HKEY_LOCAL_MACHINE\\SYSTEM\\Setup\\SetupInProgress', 'REG_DWORD', 0);
+    kernel.regSetValue('HKEY_LOCAL_MACHINE\\SYSTEM\\Setup\\OOBEInProgress', 'REG_DWORD', 0);
     localStorage.setItem('obsidianos-setup-completed', 'true');
     
     // 6. Boot into login

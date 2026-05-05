@@ -18,6 +18,9 @@ const components: Record<string, ReturnType<typeof lazy>> = {
   'regedit': lazy(() => import('../apps/Regedit/Regedit')),
   'obsidian-code': lazy(() => import('../apps/ObsidianCode/ObsidianCode')),
   'obs-record': lazy(() => import('../apps/ObsRecord/ObsRecord')),
+  'media-player': lazy(() => import('../apps/MediaPlayer/MediaPlayer')),
+  'obsidian-store': lazy(() => import('../apps/ObsidianStore/ObsidianStore')),
+  'sdk-app-runner': lazy(() => import('../apps/SdkAppRunner/SdkAppRunner')),
   'taskbar': lazy(() => import('../components/Taskbar/Taskbar')),
   'desktop': lazy(() => import('../components/Desktop/Desktop')),
 };

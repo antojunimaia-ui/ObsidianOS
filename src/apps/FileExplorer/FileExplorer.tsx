@@ -3,6 +3,7 @@
 // ============================================
 import { useState, useCallback, useRef } from 'react';
 import { useFileSystem } from '../../stores/fileSystem';
+import { useSystem } from '../../stores/systemStore';
 import { useWindowManager } from '../../stores/windowManager';
 import { useProcessManager } from '../../stores/processManager';
 import { useContextMenuStore } from '../../stores/contextMenuStore';
@@ -12,7 +13,9 @@ import kernel from '../../core/kernel';
 import './FileExplorer.css';
 
 export default function FileExplorerApp({ windowId }: { windowId: string }) {
-  const [currentPath, setCurrentPath] = useState('C:\\Users\\User');
+  const { currentUser } = useSystem();
+  const userHome = `C:\\Users\\${currentUser.username}`;
+  const [currentPath, setCurrentPath] = useState(userHome);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'list' | 'grid' | 'details'>('details');
   const [pathInput, setPathInput] = useState(currentPath);
@@ -85,16 +88,16 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
           }
         } else if (isBinary) {
           // Distinguish real system PE binaries from SDK (JS) executables.
-          // makeSysExe content starts with "[name.exe]" — SDK code does not.
+          // makeSysExe content starts with "[name.obx]" — SDK code does not.
           const isSdkApp = node.content && !node.content.trimStart().startsWith('[');
 
           if (isSdkApp) {
             // SDK app: open with SdkAppRunner
-            const pid = createProcess(`sdk:${node.name}`, node.name, '⚡');
+            const pid = createProcess('sdk-app-runner', node.name, '⚡');
             openWindow({
               title: node.name,
               icon: '⚡',
-              appId: `sdk:${node.name}`,
+              appId: 'sdk-app-runner',
               width: 600,
               height: 400,
               processId: pid,
@@ -122,7 +125,8 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
         }
       } else {
         targetAppId = (ext === 'txt' || ext === 'ini' || ext === 'js' || ext === 'json') ? 'notepad' : 
-                      (ext === 'html' || ext === 'htm') ? 'browser' : '';
+                      (ext === 'html' || ext === 'htm') ? 'browser' :
+                      (ext === 'webm' || ext === 'mp4') ? 'media-player' : '';
       }
 
       if (!targetAppId) {
@@ -160,22 +164,55 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
       case 'ini': return '⚙️';
       case 'png': case 'jpg': case 'gif': return '🖼️';
       case 'mp3': case 'wav': return '🎵';
-      case 'mp4': case 'avi': return '🎬';
+      case 'mp4': case 'avi': case 'webm': return '🎬';
       case 'exe': return '⚡';
+      case 'obx': return '⚡';
+      case 'osl': return '🔷';
       case 'zip': case 'rar': return '📦';
       default: return '📄';
     }
   };
 
+  // ── Drag from FileExplorer to Desktop ─────────────────────────────────────
+  const handleDragStart = useCallback((e: React.DragEvent, node: any) => {
+    const icon = getFileIcon(node);
+    // Determine appId for executables
+    let appId = '';
+    if (node.metadata?.type === 'app_executable' && node.content?.startsWith('{')) {
+      try { appId = JSON.parse(node.content).appId || ''; } catch { /* ignore */ }
+    } else if (node.metadata?.type === 'binary_executable') {
+      appId = `sdk:${node.name}`;
+    }
+
+    const payload = JSON.stringify({
+      path: node.path,
+      name: node.name,
+      icon,
+      appId,
+    });
+
+    e.dataTransfer.setData('application/obsidianos-file', payload);
+    e.dataTransfer.setData('text/plain', payload);
+    e.dataTransfer.effectAllowed = 'copy';
+
+    // Ghost image
+    const ghost = document.createElement('div');
+    ghost.style.cssText = 'position:fixed;top:-200px;left:-200px;background:rgba(99,102,241,0.2);border:1px solid rgba(99,102,241,0.6);border-radius:6px;padding:6px 10px;color:#fff;font-size:13px;white-space:nowrap;backdrop-filter:blur(4px);';
+    ghost.textContent = `${icon} ${node.name}`;
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 0, 0);
+    setTimeout(() => document.body.removeChild(ghost), 0);
+  }, []);
+
   const pathParts = currentPath.split('\\').filter(Boolean);
 
   const quickAccess = [
-    { name: 'Desktop', icon: '🖥️', path: 'C:\\Users\\User\\Desktop' },
-    { name: 'Documentos', icon: '📄', path: 'C:\\Users\\User\\Documents' },
-    { name: 'Downloads', icon: '⬇️', path: 'C:\\Users\\User\\Downloads' },
-    { name: 'Imagens', icon: '🖼️', path: 'C:\\Users\\User\\Pictures' },
-    { name: 'Música', icon: '🎵', path: 'C:\\Users\\User\\Music' },
-    { name: 'Vídeos', icon: '🎬', path: 'C:\\Users\\User\\Videos' },
+    { name: 'Desktop', icon: '🖥️', path: `${userHome}\\Desktop` },
+    { name: 'Documentos', icon: '📄', path: `${userHome}\\Documents` },
+    { name: 'Downloads', icon: '⬇️', path: `${userHome}\\Downloads` },
+    { name: 'Imagens', icon: '🖼️', path: `${userHome}\\Pictures` },
+    { name: 'Música', icon: '🎵', path: `${userHome}\\Music` },
+    { name: 'Vídeos', icon: '🎬', path: `${userHome}\\Videos` },
   ];
 
   const handleItemContextMenu = (e: React.MouseEvent, node: any) => {
@@ -339,6 +376,8 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
                     key={node.path}
                     ref={el => { if (el) itemRefs.current.set(node.path, el); else itemRefs.current.delete(node.path); }}
                     className={`explorer-row ${selectedItems.has(node.path) ? 'selected' : ''}`}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, node)}
                     onClick={() => setSelectedItems(new Set([node.path]))}
                     onDoubleClick={() => handleDoubleClick(node)}
                     onContextMenu={(e) => handleItemContextMenu(e, node)}
@@ -361,6 +400,8 @@ export default function FileExplorerApp({ windowId }: { windowId: string }) {
                   key={node.path}
                   ref={el => { if (el) itemRefs.current.set(node.path, el); else itemRefs.current.delete(node.path); }}
                   className={`explorer-grid-item ${selectedItems.has(node.path) ? 'selected' : ''}`}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, node)}
                   onClick={() => setSelectedItems(new Set([node.path]))}
                   onDoubleClick={() => handleDoubleClick(node)}
                   onContextMenu={(e) => handleItemContextMenu(e, node)}

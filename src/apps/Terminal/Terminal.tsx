@@ -359,7 +359,7 @@ export default function TerminalApp({ windowId }: { windowId: string }) {
           `Kernel: ObsidianOS-NT v2.4.0`,
           `Uptime: ${uptimeStr}`,
           `Packages: 9 (System32)`,
-          `Shell: cmd.exe`,
+          `Shell: cmd.obx`,
           `Resolution: ${window.innerWidth}x${window.innerHeight}`,
           `Theme: ${snapshot.theme.mode}`,
           `CPU: ${res.cpuCores} Cores @ 3.2GHz`,
@@ -389,7 +389,7 @@ export default function TerminalApp({ windowId }: { windowId: string }) {
         kernel.triggerBSOD({
           stopCode: 'MANUALLY_INITIATED_CRASH',
           technicalInfo: 'O usuário forçou um travamento do sistema usando o comando bsod.',
-          failedComponent: 'Terminal.exe',
+          failedComponent: 'Terminal.obx',
           bugCheckCode: '0x000000E2',
           parameters: ['0x00000001']
         });
@@ -397,7 +397,7 @@ export default function TerminalApp({ windowId }: { windowId: string }) {
 
       default: {
         // Try to find a real binary in System32 or current path
-        const binaryName = command.endsWith('.exe') ? command : `${command}.exe`;
+        const binaryName = command.endsWith('.obx') ? command : `${command}.obx`;
         
         const isAbsolutePath = binaryName.startsWith('C:');
         const paths = isAbsolutePath ? [binaryName] : [`${currentPath}\\${binaryName}`, `C:\\ObsidianOS\\System32\\${binaryName}`];

@@ -71,8 +71,15 @@ export const useSystem = create<SystemState>((set) => {
     });
   });
 
-  kernel.on('system:bootPhase', (phase: BootPhase) => {
-    set({ bootPhase: phase });
+  kernel.on('system:bootPhase', (phase: any) => {
+    // Mapeamento de Kernel (Caixa Alta) para UI (Minúsculo)
+    let uiPhase: any = phase;
+    if (phase === 'WINLOGON') uiPhase = 'login';
+    if (phase === 'OOBE') uiPhase = 'setup';
+    if (phase === 'DESKTOP_READY') uiPhase = 'desktop';
+    if (phase === 'OFF') uiPhase = 'off';
+    
+    set({ bootPhase: uiPhase.toLowerCase() });
   });
 
   return {

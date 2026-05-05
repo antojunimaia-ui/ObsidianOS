@@ -14,15 +14,27 @@ export default function TaskManagerApp({}: { windowId: string }) {
   const [showRunTask, setShowRunTask] = useState(false);
   const [runTaskCmd, setRunTaskCmd] = useState('');
 
-  // Performance Monitoring Loop
+  // Performance Monitoring Loop — 1 sample/second para o histórico (60s de janela)
   useEffect(() => {
+    let lastCpuSample = 0;
+    let lastMemSample = 0;
+
     const unsubCpu = kernel.on('cpuChange', (info) => {
-       setRes(info);
-       setCpuHistory(prev => [...prev.slice(1), info.cpuUsage]);
+      setRes(prev => ({ ...prev, cpuUsage: info.cpuUsage }));
+      const now = Date.now();
+      if (now - lastCpuSample >= 1000) {
+        lastCpuSample = now;
+        setCpuHistory(prev => [...prev.slice(1), info.cpuUsage]);
+      }
     });
+
     const unsubMem = kernel.on('memoryChange', (info) => {
-       setRes(info);
-       setMemHistory(prev => [...prev.slice(1), info.usedMemory]);
+      setRes(prev => ({ ...prev, usedMemory: info.usedMemory, totalMemory: info.totalMemory }));
+      const now = Date.now();
+      if (now - lastMemSample >= 1000) {
+        lastMemSample = now;
+        setMemHistory(prev => [...prev.slice(1), info.usedMemory]);
+      }
     });
 
     return () => { unsubCpu(); unsubMem(); };
@@ -46,12 +58,12 @@ export default function TaskManagerApp({}: { windowId: string }) {
     if (!runTaskCmd) return;
     // Command execution logic
     const name = runTaskCmd.toLowerCase().trim();
-    if (name === 'explorer.exe' || name === 'explorer') {
-      useProcessManager.getState().createProcess('explorer.exe', 'Windows Explorer', '📁');
-    } else if (name === 'regedit' || name === 'regedit.exe') {
+    if (name === 'explorer.obx' || name === 'explorer') {
+      useProcessManager.getState().createProcess('explorer.obx', 'Windows Explorer', '📁');
+    } else if (name === 'regedit' || name === 'regedit.obx') {
        // Ideally we'd trigger the window opening here.
        // For now, let's just create the process.
-       useProcessManager.getState().createProcess('regedit.exe', 'Editor do Registro', '🧊');
+       useProcessManager.getState().createProcess('regedit.obx', 'Editor do Registro', '🧊');
     }
     setRunTaskCmd('');
     setShowRunTask(false);

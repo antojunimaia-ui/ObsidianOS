@@ -67,10 +67,22 @@ export const defaultRegistry: Record<string, Record<string, RegistryEntry>> = {
     ContentType: { type: 'REG_SZ', value: 'application/javascript' },
     DefaultApp: { type: 'REG_SZ', value: 'notepad' },
   },
+  'HKEY_CLASSES_ROOT\\.webm': {
+    ContentType: { type: 'REG_SZ', value: 'video/webm' },
+    DefaultApp: { type: 'REG_SZ', value: 'media-player' },
+  },
+  'HKEY_CLASSES_ROOT\\.mp4': {
+    ContentType: { type: 'REG_SZ', value: 'video/mp4' },
+    DefaultApp: { type: 'REG_SZ', value: 'media-player' },
+  },
   'HKEY_LOCAL_MACHINE\\SYSTEM\\LiveMode': {
     ApiUrl: { type: 'REG_SZ', value: '' },
     CloudSyncEnabled: { type: 'REG_DWORD', value: 1 },
     LastSync: { type: 'REG_SZ', value: '' },
+  },
+  'HKEY_LOCAL_MACHINE\\SYSTEM\\Setup': {
+    SetupInProgress: { type: 'REG_DWORD', value: typeof window !== 'undefined' && localStorage.getItem('obsidianos-setup-completed') === 'true' ? 0 : 1 },
+    OOBEInProgress:  { type: 'REG_DWORD', value: typeof window !== 'undefined' && localStorage.getItem('obsidianos-setup-completed') === 'true' ? 0 : 1 },
   },
 };
 
