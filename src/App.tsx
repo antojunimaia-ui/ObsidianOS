@@ -153,45 +153,70 @@ export default function App() {
   // No manual interval needed here — the kernel scheduler emits cpuChange every 100ms
   const processes = useProcessManager(s => s.processes);
 
+  // Window Size tracking for responsive layout
+  const [windowSize, setWindowSize] = useState({ w: window.innerWidth, h: window.innerHeight });
+  useEffect(() => {
+    const handleResize = () => setWindowSize({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const taskbarPosition = String(useRegistry(s => s.hives['HKEY_CURRENT_USER\\Software\\ObsidianOS\\Taskbar']?.Position?.value || 'bottom'));
+
+  const { moveWindow, resizeWindow } = useWindowManager();
+
   // Start Shell Components as Windows (DEEP REALISM: Taskbar as a Window)
   useEffect(() => {
     if (bootPhase === 'desktop' && explorerRunning) {
       const proc = processes.find(p => p.name === 'explorer.obx');
       if (proc) {
-        // Only open if not already opened (check registry or process windows)
-        const hasTaskbar = kernel.getWindows().some(w => w.appId === 'taskbar');
-        if (!hasTaskbar) {
-          openWindow({
-            appId: 'taskbar',
-            title: 'Taskbar',
-            icon: '',
-            processId: proc.pid,
-            width: window.innerWidth,
-            height: 48,
-            hasFrame: false,
-            isSystem: true,
-            params: { x: 0, y: window.innerHeight - 48 }
-          });
+        let tbX = 0, tbY = 0, tbW = windowSize.w, tbH = 48;
+        let dtX = 0, dtY = 0, dtW = windowSize.w, dtH = windowSize.h - 48;
+
+        switch (taskbarPosition) {
+          case 'top':
+            tbX = 0; tbY = 0; tbW = windowSize.w; tbH = 48;
+            dtX = 0; dtY = 48; dtW = windowSize.w; dtH = windowSize.h - 48;
+            break;
+          case 'left':
+            tbX = 0; tbY = 0; tbW = 48; tbH = windowSize.h;
+            dtX = 48; dtY = 0; dtW = windowSize.w - 48; dtH = windowSize.h;
+            break;
+          case 'right':
+            tbX = windowSize.w - 48; tbY = 0; tbW = 48; tbH = windowSize.h;
+            dtX = 0; dtY = 0; dtW = windowSize.w - 48; dtH = windowSize.h;
+            break;
+          case 'bottom':
+          default:
+            tbX = 0; tbY = windowSize.h - 48; tbW = windowSize.w; tbH = 48;
+            dtX = 0; dtY = 0; dtW = windowSize.w; dtH = windowSize.h - 48;
+            break;
         }
 
-        const hasDesktop = kernel.getWindows().some(w => w.appId === 'desktop');
-        if (!hasDesktop) {
+        const taskbarWin = kernel.getWindows().find(w => w.appId === 'taskbar');
+        if (!taskbarWin) {
           openWindow({
-            appId: 'desktop',
-            title: 'Desktop',
-            icon: '',
-            processId: proc.pid,
-            width: window.innerWidth,
-            height: window.innerHeight - 48,
-            hasFrame: false,
-            isSystem: true,
-            zIndex: 1,
-            params: { x: 0, y: 0 }
+            appId: 'taskbar', title: 'Taskbar', icon: '', processId: proc.pid,
+            width: tbW, height: tbH, minWidth: 0, minHeight: 0, hasFrame: false, isSystem: true, params: { x: tbX, y: tbY }
           });
+        } else {
+          if (taskbarWin.x !== tbX || taskbarWin.y !== tbY) moveWindow(taskbarWin.id, tbX, tbY);
+          if (taskbarWin.width !== tbW || taskbarWin.height !== tbH) resizeWindow(taskbarWin.id, tbW, tbH);
+        }
+
+        const desktopWin = kernel.getWindows().find(w => w.appId === 'desktop');
+        if (!desktopWin) {
+          openWindow({
+            appId: 'desktop', title: 'Desktop', icon: '', processId: proc.pid,
+            width: dtW, height: dtH, minWidth: 0, minHeight: 0, hasFrame: false, isSystem: true, zIndex: 1, params: { x: dtX, y: dtY }
+          });
+        } else {
+          if (desktopWin.x !== dtX || desktopWin.y !== dtY) moveWindow(desktopWin.id, dtX, dtY);
+          if (desktopWin.width !== dtW || desktopWin.height !== dtH) resizeWindow(desktopWin.id, dtW, dtH);
         }
       }
     }
-  }, [bootPhase, explorerRunning, processes, openWindow]);
+  }, [bootPhase, explorerRunning, processes, openWindow, moveWindow, resizeWindow, windowSize, taskbarPosition]);
 
   const { isOpen, x, y, items, closeContextMenu } = useContextMenuStore();
 

@@ -181,5 +181,40 @@ OS.addBootLog('vss: Snapshot created (' + count + ' system files)');
 OS.registerDriver({ name: 'vss', path: 'C:\\\\ObsidianOS\\\\System32\\\\drivers\\\\vss.sys', status: 'loaded', type: 'storage', loadOrder: 3, dependencies: ['ntfs'] });
 OS.terminate(0);
     `.trim()
+  ],
+  [
+    'C:\\ObsidianOS\\System32\\cmd.osl',
+    'cmd.osl',
+    'C:\\ObsidianOS\\System32',
+    `
+      system::log("ObsidianOS Shell [Version 1.0.0]");
+      system::log("(c) Obsidian Corporation. All rights reserved.");
+      
+      while (true) {
+        let cwd = system::fs_getcwd();
+        system::log("");
+        system::log(cwd + "> ");
+        
+        let input = system::stdin();
+        
+        if (input == "help") {
+          system::log("Comandos disponiveis:");
+          system::log("  ls    - Listar arquivos");
+          system::log("  cd    - Mudar diretorio");
+          system::log("  echo  - Exibir texto");
+          system::log("  help  - Mostrar esta ajuda");
+          system::log("  exit  - Sair do shell");
+        } else if (input == "ls") {
+          let files = system::fs_list("");
+          system::log(files);
+        } else if (input == "exit") {
+          return 0;
+        } else if (input == "") {
+          // Do nothing
+        } else {
+          system::log("Comando nao reconhecido: " + input);
+        }
+      }
+    `.trim()
   ]
 ];

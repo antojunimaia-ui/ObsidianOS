@@ -68,6 +68,9 @@ export interface Process {
   startTime: number;
   exitCode?: number;
   windowId?: string;
+  currentDirectory: string;
+  // I/O
+  stdin: string[];       // Input queue
   // Legacy compat
   status: 'running' | 'suspended' | 'terminated';
 }

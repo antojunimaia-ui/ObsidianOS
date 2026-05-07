@@ -94,7 +94,7 @@ export class Lexer {
   }
 
   private identifier(): Token {
-    const start = this.cursor - 1;
+    const start = this.cursor;
     while (this.isAlphaNumeric(this.peek())) this.advance();
     const value = this.source.substring(start, this.cursor);
     const type = Lexer.KEYWORDS[value] || TokenType.Identifier;
@@ -102,7 +102,7 @@ export class Lexer {
   }
 
   private number(): Token {
-    const start = this.cursor - 1;
+    const start = this.cursor;
     while (this.isDigit(this.peek())) this.advance();
 
     // Fractional part
@@ -116,6 +116,7 @@ export class Lexer {
   }
 
   private string(quote: string): Token {
+    this.advance(); // Consume opening quote
     const start = this.cursor;
     while (this.peek() !== quote && !this.isAtEnd()) {
       if (this.peek() === '\n') this.line++;
@@ -125,7 +126,7 @@ export class Lexer {
     if (this.isAtEnd()) throw new Error(`Unterminated string at line ${this.line}`);
 
     const value = this.source.substring(start, this.cursor);
-    this.advance(); // Closing quote
+    this.advance(); // Consume closing quote
     return this.makeToken(TokenType.String, value);
   }
 

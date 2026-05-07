@@ -21,6 +21,7 @@ export const defaultRegistry: Record<string, Record<string, RegistryEntry>> = {
     AnimationSpeed: { type: 'REG_SZ', value: 'normal' },
   },
   'HKEY_CURRENT_USER\\Software\\ObsidianOS\\Taskbar': {
+    Position: { type: 'REG_SZ', value: 'bottom' },
     Alignment: { type: 'REG_SZ', value: 'center' },
     AutoHide: { type: 'REG_DWORD', value: 0 },
     ShowSearch: { type: 'REG_DWORD', value: 1 },

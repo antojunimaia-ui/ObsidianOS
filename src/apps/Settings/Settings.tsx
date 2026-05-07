@@ -28,6 +28,9 @@ export default function SettingsApp({ }: { windowId: string }) {
     '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#64748b',
   ];
 
+  const taskbarPosition = String(useRegistry(s => s.hives['HKEY_CURRENT_USER\\Software\\ObsidianOS\\Taskbar']?.Position?.value || 'bottom'));
+  const taskbarAlignment = String(useRegistry(s => s.hives['HKEY_CURRENT_USER\\Software\\ObsidianOS\\Taskbar']?.Alignment?.value || 'center'));
+
   const renderContent = () => {
     switch (activeSection) {
       case 'personalization':
@@ -119,6 +122,48 @@ export default function SettingsApp({ }: { windowId: string }) {
                 >
                   <div className="toggle-thumb" />
                 </button>
+              </div>
+            </div>
+
+            <div className="settings-card">
+              <h3>Barra de Tarefas</h3>
+              
+              <div className="settings-toggle-row">
+                <div>
+                  <span className="settings-label">Posição da Barra</span>
+                  <span className="settings-desc">Onde a barra de tarefas aparece na tela</span>
+                </div>
+                <select 
+                  className="settings-select"
+                  value={taskbarPosition}
+                  onChange={(e) => {
+                    const { setValue } = useRegistry.getState();
+                    setValue('HKEY_CURRENT_USER\\Software\\ObsidianOS\\Taskbar\\Position', 'REG_SZ', e.target.value);
+                  }}
+                >
+                  <option value="bottom">Abaixo</option>
+                  <option value="top">Acima</option>
+                  <option value="left">Esquerda</option>
+                  <option value="right">Direita</option>
+                </select>
+              </div>
+
+              <div className="settings-toggle-row" style={{ marginTop: '16px' }}>
+                <div>
+                  <span className="settings-label">Alinhamento dos Ícones</span>
+                  <span className="settings-desc">Posição dos ícones dos aplicativos</span>
+                </div>
+                <select 
+                  className="settings-select"
+                  value={taskbarAlignment}
+                  onChange={(e) => {
+                    const { setValue } = useRegistry.getState();
+                    setValue('HKEY_CURRENT_USER\\Software\\ObsidianOS\\Taskbar\\Alignment', 'REG_SZ', e.target.value);
+                  }}
+                >
+                  <option value="center">Centralizado</option>
+                  <option value="left">À esquerda</option>
+                </select>
               </div>
             </div>
           </div>

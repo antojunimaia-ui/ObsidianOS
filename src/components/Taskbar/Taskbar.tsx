@@ -6,6 +6,7 @@ import { useSystem } from '../../stores/systemStore';
 import { useWindowManager } from '../../stores/windowManager';
 import { useProcessManager } from '../../stores/processManager';
 import { useContextMenuStore } from '../../stores/contextMenuStore';
+import { useRegistry } from '../../stores/registry';
 import './Taskbar.css';
 
 export default function Taskbar() {
@@ -14,6 +15,9 @@ export default function Taskbar() {
   const { createProcess } = useProcessManager();
   const { openContextMenu } = useContextMenuStore();
   const [time, setTime] = useState(new Date());
+
+  const position = String(useRegistry(s => s.hives['HKEY_CURRENT_USER\\Software\\ObsidianOS\\Taskbar']?.Position?.value || 'bottom'));
+  const alignment = String(useRegistry(s => s.hives['HKEY_CURRENT_USER\\Software\\ObsidianOS\\Taskbar']?.Alignment?.value || 'center'));
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -68,7 +72,7 @@ export default function Taskbar() {
   };
 
   return (
-    <div className="taskbar acrylic" onContextMenu={handleTaskbarContextMenu}>
+    <div className={`taskbar acrylic position-${position} alignment-${alignment}`} onContextMenu={handleTaskbarContextMenu}>
       {/* Left section - Empty or system icons */}
       <div className="taskbar-left">
       </div>

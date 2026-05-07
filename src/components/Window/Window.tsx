@@ -24,7 +24,8 @@ export default function Window({ windowId, children }: Props) {
   const resizeStart = useRef({ x: 0, y: 0, width: 0, height: 0, winX: 0, winY: 0 });
 
   const handleMouseDown = useCallback(() => {
-    if (win && !win.isActive) {
+    // System windows (taskbar, desktop) should never steal focus
+    if (win && !win.isActive && !win.isSystem) {
       focusWindow(windowId);
     }
   }, [win, windowId, focusWindow]);

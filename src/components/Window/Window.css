@@ -50,7 +50,7 @@
   pointer-events: all;
 }
 
-.window:not(.active):not(.frameless) {
+.window:not(.active):not(.frameless):not(.system-window) {
   opacity: 0.92;
 }
 

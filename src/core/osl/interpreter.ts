@@ -14,8 +14,10 @@ export class ReturnValue {
 export class Interpreter {
   private globals: Environment = new Environment();
   private environment: Environment = this.globals;
+  private pid: number = 0;
 
-  constructor() {
+  constructor(pid: number = 0) {
+    this.pid = pid;
     this.setupGlobals();
   }
 
@@ -51,6 +53,8 @@ export class Interpreter {
   // ── Execution ──────────────────────────────────────────────────────────────
 
   private async execute(statement: Statement): Promise<any> {
+    if (!kernel.getProcess(this.pid)) throw new Error("Process terminated");
+    
     switch (statement.type) {
       case 'ExpressionStatement':
         return await this.evaluate(statement.expression);
@@ -181,7 +185,7 @@ export class Interpreter {
     // Mapeamento de system::method() para kernel calls
     switch (expr.method) {
       case 'log':
-        kernel.log('INFO', 'OSL', args.join(' '));
+        kernel.emit('process:stdout', { pid: this.pid, message: args.join(' ') });
         return true;
       case 'fs_exists':
         return !!kernel.fsGetNode(args[0]);
@@ -213,6 +217,26 @@ export class Interpreter {
         if (args[0] === 'ram') return resources.usedMemory;
         if (args[0] === 'cpu') return resources.cpuUsage;
         return resources;
+      case 'stdin':
+        return await kernel.readStdin(this.pid);
+      case 'fs_getcwd':
+        return kernel.getProcess(this.pid)?.currentDirectory || "C:\\";
+      case 'fs_chdir': {
+        const proc = kernel.getProcess(this.pid);
+        if (proc) {
+          const target = args[0] as string;
+          const node = kernel.fsGetNode(target);
+          if (node && node.type === 'directory') {
+            proc.currentDirectory = target;
+            return true;
+          }
+        }
+        return false;
+      }
+      case 'fs_list': {
+        const path = args[0] || kernel.getProcess(this.pid)?.currentDirectory || "C:\\";
+        return kernel.fsGetChildren(path).map((n: any) => n.name).join(", ");
+      }
       default:
         throw new Error(`Unknown system call: system::${expr.method}`);
     }

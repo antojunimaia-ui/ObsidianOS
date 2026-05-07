@@ -1,6 +1,6 @@
 # 🖥️ ObsidianOS
 
-> Um sistema operacional completo rodando inteiramente no navegador, construído com React, TypeScript e Vite. Simula fielmente a experiência de um OS moderno — com BIOS real, kernel executável, disco virtual OPFS, sistema de arquivos persistente, registro, processos, janelas, BSOD, Recovery Mode e muito mais.
+> Um sistema operacional completo rodando inteiramente no navegador, construído com React, TypeScript e Vite. Simula fielmente a experiência de um OS moderno — com BIOS real, kernel executável, disco virtual OPFS, sistema de arquivos persistente, registro, processos, janelas, BSOD, Recovery Mode, linguagem de script própria (OSL) e muito mais.
 
 ---
 
@@ -14,10 +14,11 @@
 6. [Fluxo de Boot](#-fluxo-de-boot)
 7. [Componentes da Interface](#-componentes-da-interface)
 8. [Aplicativos Integrados](#-aplicativos-integrados)
-9. [Processos e Drivers do Sistema](#-processos-e-drivers-do-sistema)
+9. [OSL — ObsidianOS Scripting Language](#-osl--obsidianos-scripting-language)
 10. [SDK de Aplicativos](#-sdk-de-aplicativos)
-11. [Mecânicas de Realismo](#-mecânicas-de-realismo)
-12. [Como Adicionar um Novo Aplicativo](#-como-adicionar-um-novo-aplicativo)
+11. [Processos e Drivers do Sistema](#-processos-e-drivers-do-sistema)
+12. [Mecânicas de Realismo](#-mecânicas-de-realismo)
+13. [Como Adicionar um Novo Aplicativo](#-como-adicionar-um-novo-aplicativo)
 
 ---
 
@@ -29,8 +30,9 @@
 - **Kernel singleton** com sistema de eventos, logging, gerenciamento de recursos e execution engine
 - **Disco virtual OPFS** — persistência real via Origin Private File System do navegador, com fallback para `localStorage`
 - **Sistema de arquivos virtual** com permissões, atributos, metadados e suporte a executáveis JS
-- **Registro do sistema** completo com hives reais: `HKEY_LOCAL_MACHINE`, `HKEY_CURRENT_USER`, `HKEY_CLASSES_ROOT
-- **8 aplicativos completos** incluindo Terminal com 20+ comandos, Explorador de Arquivos, Gerenciador de Tarefas com gráficos em tempo real, e mais
+- **Registro do sistema** completo com hives reais: `HKEY_LOCAL_MACHINE`, `HKEY_CURRENT_USER`, `HKEY_CLASSES_ROOT`
+- **OSL (ObsidianOS Scripting Language)** — linguagem de script própria com lexer, parser e interpreter completos
+- **13 aplicativos completos** incluindo Terminal (20+ comandos), IDE com syntax highlighting, Gravador de tela, App Store e mais
 
 ---
 
@@ -67,7 +69,24 @@ ObsidianOS/
     │   ├── kernel.ts             # Kernel singleton — coração do sistema
     │   ├── appRegistry.ts        # Registro dinâmico de aplicativos
     │   ├── defaultFileSystem.ts  # Filesystem padrão + binários executáveis
-    │   └── defaultRegistry.ts    # Registro padrão do sistema
+    │   ├── defaultRegistry.ts    # Registro padrão do sistema
+    │   ├── opfsDriver.ts         # Driver OPFS com fallback localStorage
+    │   ├── osl/                  # ObsidianOS Scripting Language
+    │   │   ├── lexer.ts          # Tokenizador OSL
+    │   │   ├── parser.ts         # Parser (AST)
+    │   │   ├── interpreter.ts    # Interpreter com syscalls
+    │   │   ├── environment.ts    # Escopos de variáveis
+    │   │   └── types.ts          # Tipos do AST
+    │   └── fs/                   # Módulos do filesystem
+    │       ├── binaries.ts       # Binários executáveis (.exe)
+    │       ├── system.ts         # Arquivos de sistema (dlls, drivers)
+    │       ├── apps.ts           # Manifests de aplicativos
+    │       ├── dirs.ts           # Estrutura de diretórios padrão
+    │       ├── drivers.ts        # Drivers do sistema
+    │       ├── sdk.ts            # SDK e documentação
+    │       ├── osl.ts            # Scripts OSL padrão
+    │       ├── user.ts           # Arquivos do usuário
+    │       └── helpers.ts        # Utilitários do FS
     ├── stores/
     │   ├── fileSystem.ts         # Mirror reativo do FS do kernel
     │   ├── registry.ts           # Mirror reativo do registry do kernel
@@ -78,14 +97,15 @@ ObsidianOS/
     ├── contexts/
     │   └── ProcessContext.tsx    # Contexto de processo por janela
     ├── components/
-    │   ├── Boot/                 # BootScreen + BSOD
+    │   ├── Boot/                 # BootScreen + BSOD + RecoveryMode
     │   ├── LockScreen/           # Tela de bloqueio / login
     │   ├── Desktop/              # Desktop com ícones e wallpaper
-    │   ├── Taskbar/              # Barra de tarefas
+    │   ├── Taskbar/              # Barra de tarefas (posicionável)
     │   ├── StartMenu/            # Menu Iniciar com busca
     │   ├── Window/               # Janela arrastável + WindowRenderer
     │   ├── ContextMenu/          # Menu de contexto global
-    │   └── Notifications/        # Sistema de notificações
+    │   ├── Notifications/        # Sistema de notificações
+    │   └── Setup/                # OOBE — configuração inicial
     └── apps/
         ├── Terminal/
         ├── FileExplorer/
@@ -94,7 +114,12 @@ ObsidianOS/
         ├── Calculator/
         ├── Browser/
         ├── Settings/
-        └── Regedit/
+        ├── Regedit/
+        ├── ObsidianCode/         # IDE com syntax highlighting
+        ├── ObsidianStore/        # App Store integrada
+        ├── ObsRecord/            # Gravador de tela/câmera
+        ├── MediaPlayer/          # Player de vídeo
+        └── SdkAppRunner/         # Executor de apps SDK instalados
 ```
 
 ---
@@ -139,7 +164,7 @@ SPA pura sem backend — pode ser hospedada em qualquer CDN estático (Vercel, N
 └─────────────────────────────────────────┘
 ```
 
-Todos os Zustand stores operam como **mirrors reativos** do kernel. A fonte da verdade do estado e da lógica vive inteiramente no `Kernel` singleton. Os stores refletem o estado via eventos (`kernel.on('reset', ...)`, `kernel.on('system:snapshot', ...)`).
+Todos os Zustand stores operam como **mirrors reativos** do kernel. A fonte da verdade do estado e da lógica vive inteiramente no `Kernel` singleton. Os stores refletem o estado via eventos (`kernel.on('system:snapshot', ...)`, `kernel.on('fs:snapshot', ...)`).
 
 ---
 
@@ -152,7 +177,7 @@ Singleton clássico — uma única instância em toda a aplicação.
 | Sistema | Função |
 |---------|--------|
 | **BIOS / Boot** | Executa `powerOn()`, roda `bootmgr.exe` como binário real |
-| **Execution Engine** | Executa arquivos `.exe` do filesystem como scripts JS em sandbox |
+| **Execution Engine** | Executa arquivos `.exe` e `.osl` do filesystem como scripts em sandbox |
 | **Logging** | 6 níveis: `DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL`, `FATAL` |
 | **Recursos** | CPU, RAM e disco em tempo real |
 | **Drivers** | Registra e consulta drivers carregados |
@@ -317,6 +342,11 @@ Os componentes React são lazy-loaded estaticamente:
 | `task-manager` | `apps/TaskManager/TaskManager` |
 | `browser` | `apps/Browser/Browser` |
 | `regedit` | `apps/Regedit/Regedit` |
+| `obsidian-code` | `apps/ObsidianCode/ObsidianCode` |
+| `obsidian-store` | `apps/ObsidianStore/ObsidianStore` |
+| `obs-record` | `apps/ObsRecord/ObsRecord` |
+| `media-player` | `apps/MediaPlayer/MediaPlayer` |
+| `sdk-runner` | `apps/SdkAppRunner/SdkAppRunner` |
 
 ---
 
@@ -337,6 +367,8 @@ Duas fases: relógio/data → campo de senha. Senha em branco = acesso direto.
 
 ### Taskbar
 `[Iniciar] [Pesquisa]` · `[janelas abertas]` · `[WiFi] [Volume] [Bateria] [Relógio]`
+
+Posição configurável via Registro: `HKEY_CURRENT_USER\Software\ObsidianOS\Taskbar\Position` → `bottom | top | left | right`
 
 ### Start Menu
 Busca em tempo real nos apps registrados. Seção "Fixados" (primeiros 6 apps). Context menu por app.
@@ -359,12 +391,113 @@ Global, singleton, gerenciado pelo `contextMenuStore`. Suporta separadores, item
 | Bloco de Notas | `notepad` | Editor de texto com save no filesystem virtual |
 | Calculadora | `calculator` | Operações básicas e avançadas |
 | Navegador | `browser` | Iframe com barra de endereço |
-| Configurações | `settings` | Tema, wallpaper, volume, rede |
+| Configurações | `settings` | Tema, wallpaper, volume, rede, posição da taskbar |
 | Editor do Registro | `regedit` | Navegação e edição do registro do sistema |
+| **Obsidian Code** | `obsidian-code` | IDE completa para SDK (.obx) e OSL (.osl) com syntax highlighting, file tree, console integrado e execução em tempo real |
+| **Obsidian Store** | `obsidian-store` | App Store com busca, categorias e instalação de apps via filesystem virtual |
+| **ObS Record** | `obs-record` | Gravador de tela/câmera com preview ao vivo, pausa, qualidade ajustável, download e save no VFS |
+| **Media Player** | `media-player` | Player de vídeo com suporte a blob URLs e base64, integrado ao File Explorer |
+| **SDK App Runner** | `sdk-runner` | Executor sandbox para apps instalados via Obsidian Store |
 
 ### Comandos do Terminal
 
 `help` · `dir`/`ls` · `cd` · `cls`/`clear` · `echo` · `type`/`cat` · `mkdir`/`md` · `touch` · `del`/`rm` · `rename` · `move` · `copy` · `tasklist` · `taskkill` · `ping` · `ipconfig` · `systeminfo` · `reg` · `regedit` · `calc` · `notepad` · `explorer` · `start` · `shutdown`/`reboot`
+
+---
+
+## 🔷 OSL — ObsidianOS Scripting Language
+
+O OSL é uma linguagem de script interpretada, criada especificamente para o ObsidianOS. Os arquivos têm extensão `.osl` e são executados diretamente pelo kernel via interpreter próprio.
+
+### Pipeline de execução
+
+```
+Código fonte (.osl)
+    ↓ Lexer         → stream de tokens
+    ↓ Parser        → AST (Abstract Syntax Tree)
+    ↓ Interpreter   → execução + syscalls
+```
+
+### Sintaxe
+
+```osl
+// Variáveis
+let nome = "Developer";
+
+// Funções
+fn saudacao(usuario) {
+    system::log("Bem-vindo, " + usuario + "!");
+}
+
+// Estruturas de controle
+if (nome == "Developer") {
+    saudacao(nome);
+} else {
+    system::log("Acesso negado.");
+}
+
+// Loop
+let i = 0;
+while (i < 5) {
+    system::log("Iteração: " + i);
+    i = i + 1;
+}
+```
+
+### Syscalls disponíveis (`system::`)
+
+| Syscall | Descrição |
+|---------|-----------|
+| `system::log(msg)` | Imprime no console do processo |
+| `system::fs_read(path)` | Lê conteúdo de um arquivo |
+| `system::fs_write(path, content)` | Escreve em um arquivo |
+| `system::fs_exists(path)` | Verifica se um nó existe |
+| `system::fs_delete(path)` | Deleta um arquivo/pasta |
+| `system::fs_list(path)` | Lista filhos de um diretório |
+| `system::fs_getcwd()` | Retorna diretório atual do processo |
+| `system::fs_chdir(path)` | Muda diretório do processo |
+| `system::reg_get(path)` | Lê valor do registro |
+| `system::get_resource(type)` | Retorna `ram` ou `cpu` em uso |
+| `system::stdin()` | Lê input do usuário (async) |
+| `system::panic(code, msg)` | Dispara BSOD |
+
+### Funções built-in
+
+| Função | Descrição |
+|--------|-----------|
+| `print(...)` | Loga via kernel |
+| `wait(ms)` | Aguarda N milissegundos (async) |
+| `rand(max)` | Número aleatório de 0 a max |
+
+---
+
+## 🔧 SDK de Aplicativos
+
+Apps SDK são scripts JavaScript (`.obx`) que rodam via `SdkAppRunner` ou diretamente pelo kernel execution engine. Têm acesso à API `OS.*`:
+
+```javascript
+// Globals SDK disponíveis
+OS.addBootLog(msg)
+OS.readFile(path)
+OS.writeFile(path, content)
+OS.listFiles(path)
+OS.createProcess(name, title, icon)
+OS.allocateMemory(mb, name)
+OS.getResources()    // { usedMemory, totalMemory, cpuUsage }
+OS.terminate(code)
+OS.wait(ms)
+
+// StdIO
+StdIO.print(msg)
+StdIO.error(msg)
+
+// Proc
+Proc.pid
+Proc.exit(code)
+Proc.wait(ms)
+```
+
+Apps da **Obsidian Store** são instalados em `C:\Program Files\ObsidianOS Apps\` e têm acesso à API `OS.User32` para criar elementos DOM dentro da janela do SdkAppRunner.
 
 ---
 
@@ -374,7 +507,7 @@ Global, singleton, gerenciado pelo `contextMenuStore`. Suporta separadores, item
 Deletar estes arquivos dispara BSOD automaticamente:
 
 | Arquivo | Stop Code |
-|---------|-----------|
+|---------|-----------| 
 | `gdi32.dll` | `WIN32K_CRITICAL_FAILURE` (com corrupção visual por 4s antes) |
 | `user32.dll` | `CLIENT_SERVER_RUNTIME_ISSUE` (sistema fica não-responsivo por 5s) |
 
@@ -390,6 +523,9 @@ Deletar estes arquivos dispara BSOD automaticamente:
 
 ### Auto-Repair
 Se `bootmgr.exe` não for encontrado no boot, o kernel executa `fsDeepReformat()` e tenta restaurar antes de falhar com BSOD.
+
+### Recovery Mode
+Após 3 crashes consecutivos (contados em `obsidianos_crash_count`), o sistema entra em Recovery Mode ao invés de tentar bootar normalmente.
 
 ### Monitoramento de recursos
 CPU calculada a partir da soma dos processos ativos + ruído orgânico. RAM alocada/liberada dinamicamente pelo kernel via `allocateMemory`/`freeMemory`. Overload de RAM dispara BSOD `MEMORY_MANAGEMENT`.

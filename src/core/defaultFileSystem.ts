@@ -23,6 +23,9 @@ export { makeFile, makeDir };
 
 // Build a realistic file system
 export const defaultNodes: Record<string, FileSystemNode> = {};
+if (typeof window !== 'undefined') {
+  (window as any).__obsidian_defaultNodes = defaultNodes;
+}
 
 // 1. Dirs
 dirs.forEach(([path, name, parent, sys]) => {

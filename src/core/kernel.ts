@@ -1048,6 +1048,8 @@ class Kernel {
       signalHandlers: {},
       startTime: Date.now(),
       windowId: undefined,
+      currentDirectory: 'C:\\Users\\User',
+      stdin: [],
       // legacy compat
       status: 'running',
     };
@@ -1065,15 +1067,53 @@ class Kernel {
     }
   }
 
+  // ── I/O ────────────────────────────────────────────────────────────────────
+  writeStdin(pid: number, data: string) {
+    const proc = this._processes.get(pid);
+    if (!proc) return;
+    
+    proc.stdin.push(data);
+    this.log('DEBUG', 'Kernel', `Stdin [PID:${pid}]: ${data}`);
+    this.emit(`process:stdin:${pid}`, data);
+  }
+
+  readStdin(pid: number): Promise<string> {
+    return new Promise((resolve) => {
+      const proc = this._processes.get(pid);
+      if (!proc) { resolve(''); return; }
+
+      if (proc.stdin.length > 0) {
+        resolve(proc.stdin.shift()!);
+        return;
+      }
+
+      // Wait for input
+      const handler = (data: string) => {
+        this.off(`process:stdin:${pid}`, handler);
+        proc.stdin.shift(); // Remove it as we just read it
+        resolve(data);
+      };
+      this.on(`process:stdin:${pid}`, handler);
+    });
+  }
+
   // ========== Binary Execution Engine ==========
   async executeBinary(pid: number, path: string, args: string[] = []) {
-    const node = this.fsGetNode(path);
-    if (!node || node.type !== 'file' || !node.content) {
-      this.log('ERROR', 'ExecutionEngine', `Binary not found or corrupted: ${path}`);
-      this.emit('process:stdout', { pid, message: `ERROR: Binary not found: ${path}` });
-      // Don't terminate — let the window stay open showing the error
-      return;
+    let rawNode = this.fsGetNode(path);
+    if (!rawNode || rawNode.type !== 'file' || !rawNode.content) {
+      // Auto-repair missing default system files
+      if (typeof window !== 'undefined' && (window as any).__obsidian_defaultNodes && (window as any).__obsidian_defaultNodes[path]) {
+         rawNode = (window as any).__obsidian_defaultNodes[path];
+         this._filesystem.set(path, rawNode!);
+         this._persistFileSystem();
+      } else {
+        this.log('ERROR', 'ExecutionEngine', `Binary not found or corrupted: ${path}`);
+        this.emit('process:stdout', { pid, message: `ERROR: Binary not found: ${path}` });
+        // Don't terminate — let the window stay open showing the error
+        return;
+      }
     }
+    const node = rawNode!;
 
     const proc = this.getProcess(pid);
     if (!proc) return;
@@ -1131,6 +1171,9 @@ class Kernel {
       getTimestamp:  () => Date.now(),
       ping:          () => ({ status: 'ok', latency: Math.floor(Math.random() * 20) + 1 }),
       wait:          (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+      stdin: {
+        read: () => this.readStdin(pid),
+      },
       // ── Namespaced aliases (for obslogon.exe and other system binaries) ───
       Registry: {
         GetValue: (key: string, val: string) => this.regGetValue(`${key}\\${val}`),
@@ -1152,6 +1195,17 @@ class Kernel {
       Utils: {
         Sleep: (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
       },
+      fs: {
+        getcwd: () => proc.currentDirectory,
+        chdir: (p: string) => {
+          const node = this.fsGetNode(p);
+          if (node && node.type === 'directory') {
+            proc.currentDirectory = p;
+            return true;
+          }
+          return false;
+        }
+      }
     };
 
     const systemFolder  = path.startsWith('C:\\ObsidianOS\\System32');
@@ -1213,14 +1267,14 @@ class Kernel {
     }
 
     // --- OSL SCRIPT EXECUTION ---
-    if (path.endsWith('.osl')) {
+    if (path.endsWith('.osl') || path.endsWith('.obx') && node.content && node.content.startsWith('system::')) {
       try {
-        const source = node.content;
+        const source = node.content as string;
         const lexer = new Lexer(source);
         const tokens = lexer.tokenize();
         const parser = new Parser(tokens);
         const ast = parser.parse();
-        const interpreter = new Interpreter();
+        const interpreter = new Interpreter(pid);
         
         // Execute asynchronously
         interpreter.interpret(ast).then(() => {
@@ -1228,11 +1282,13 @@ class Kernel {
           this.terminateProcess(pid);
         }).catch(err => {
           this.log('ERROR', 'OSL', `Runtime Error in ${node.name}: ${err.message}`);
+          this.emit('process:stderr', { pid, message: `Runtime Error: ${err.message}` });
           this.terminateProcess(pid);
         });
         return;
       } catch (err: any) {
         this.log('ERROR', 'OSL', `Compile Error in ${node.name}: ${err.message}`);
+        this.emit('process:stderr', { pid, message: `Compile Error: ${err.message}` });
         this.terminateProcess(pid);
         return;
       }
@@ -1990,7 +2046,7 @@ class Kernel {
       x: isSystem ? (config.params?.x ?? 0) : Math.max(40, (sw - w) / 2 + Math.random() * 60 - 30),
       y: isSystem ? (config.params?.y ?? 0) : Math.max(20, (sh - h) / 2 + Math.random() * 60 - 30),
       width: w, height: h,
-      minWidth: config.minWidth || 400, minHeight: config.minHeight || 300,
+      minWidth: config.minWidth ?? (isSystem ? 0 : 400), minHeight: config.minHeight ?? (isSystem ? 0 : 300),
       isMinimized: false, isMaximized: false, isActive: !isSystem,
       zIndex: config.zIndex ?? (isSystem ? 1000 : ++this._topZIndex), opacity: 1,
       isResizable: !isSystem && config.isResizable !== false, 
@@ -2082,9 +2138,13 @@ class Kernel {
   }
 
   focusWindow(id: string) {
+    const target = this._windows.get(id);
+    // System windows (taskbar, desktop) should never steal focus
+    if (target?.isSystem) return;
     const newZ = ++this._topZIndex;
     this._activeWindowId = id;
     for (const [wid, win] of this._windows.entries()) {
+      if (win.isSystem) continue; // never touch system windows
       const t = wid === id;
       this._windows.set(wid, { ...win, isActive: t, zIndex: t ? newZ : win.zIndex, isMinimized: t ? false : win.isMinimized });
     }
