@@ -1,4 +1,5 @@
 import { now } from './helpers';
+import { SYSTEM_PMEM_B64 } from '../pm/system-image';
 
 export const systemExes: [string, string, string, string, string?][] = [
   ['C:\\ObsidianOS\\System32\\ntoskrnl.obx', 'ntoskrnl.obx', 'C:\\ObsidianOS\\System32', 'ObsidianOS NT Kernel'],
@@ -339,4 +340,6 @@ export const sysConfigFiles: [string, string, string, string, string][] = [
   ['C:\\ObsidianOS\\System32\\config\\SOFTWARE', 'SOFTWARE', 'C:\\ObsidianOS\\System32\\config', 'dat', '[Registry Hive]\nType=SOFTWARE\nLastWritten=' + now],
   ['C:\\ObsidianOS\\System32\\config\\SAM', 'SAM', 'C:\\ObsidianOS\\System32\\config', 'dat', '[Registry Hive]\nType=SAM\nSecurity=ENCRYPTED\nLastWritten=' + now],
   ['C:\\ObsidianOS\\System32\\config\\SECURITY', 'SECURITY', 'C:\\ObsidianOS\\System32\\config', 'dat', '[Registry Hive]\nType=SECURITY\nLastWritten=' + now],
+  // PM system memory image: the kernel reads OS memory geometry FROM THIS FILE at boot.
+  ['C:\\ObsidianOS\\System32\\config\\system.pmem', 'system.pmem', 'C:\\ObsidianOS\\System32\\config', 'pmem', SYSTEM_PMEM_B64],
 ];

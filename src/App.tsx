@@ -36,8 +36,7 @@ export default function App() {
   // SYNC: Ensure Kernel user matches persisted Local User Store
   useEffect(() => {
     if (currentUser) {
-      (kernel as any)._user = currentUser;
-      (kernel as any)._emitSystemSnapshot();
+      kernel.setCurrentUser(currentUser);
     }
   }, [currentUser]);
 
@@ -48,7 +47,7 @@ export default function App() {
       localStorage.removeItem('obsidianos_crash_count');
       const ram = getRegValue('HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\\PhysicalMemoryMB');
       if (typeof ram === 'number') {
-        (kernel as any)._resources.totalMemory = ram;
+        kernel.setTotalMemory(ram);
       }
     }
   }, [bootPhase, getRegValue]);

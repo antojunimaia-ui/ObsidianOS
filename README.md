@@ -457,6 +457,13 @@ while (i < 5) {
 | `system::fs_getcwd()` | Retorna diretório atual do processo |
 | `system::fs_chdir(path)` | Muda diretório do processo |
 | `system::reg_get(path)` | Lê valor do registro |
+| `system::mem_stats()` | Resumo do address space PM do processo |
+| `system::mem_write(block, offset, value)` | Escreve texto/número na memória PM |
+| `system::mem_read(block, offset, length)` | Lê texto da memória PM |
+| `system::mem_label(nome, block, offset)` | Define label no address space |
+| `system::mem_snap()` | Hiberna o próprio space em `.pmem` |
+| `system::mem_resume()` | Restaura o próprio space do `.pmem` |
+| `system::mem_audit()` | Razão vs. lastro da RAM |
 | `system::get_resource(type)` | Retorna `ram` ou `cpu` em uso |
 | `system::stdin()` | Lê input do usuário (async) |
 | `system::panic(code, msg)` | Dispara BSOD |

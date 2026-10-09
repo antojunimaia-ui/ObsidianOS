@@ -53,9 +53,9 @@ export default function SetupWizard() {
     useUserStore.setState({ currentUser: newProfile, isAuthenticated: false });
 
     // 3. Update Kernel's user state (This is critical for LockScreen to see the right user)
-    (kernel as any)._user = newProfile;
-    (kernel as any).sysCreateUserHome(username);
-    (kernel as any)._persistSystemState();
+    kernel.setCurrentUser(newProfile);
+    kernel.sysCreateUserHome(username);
+    kernel.persistSystemState();
 
     // 4. Set the chosen theme
     setTheme({ accentColor });
@@ -66,7 +66,7 @@ export default function SetupWizard() {
     localStorage.setItem('obsidianos-setup-completed', 'true');
     
     // 6. Boot into login
-    (kernel as any).bootPhase = 'WINLOGON';
+    kernel.bootPhase = 'WINLOGON';
   };
 
   const renderStep = () => {

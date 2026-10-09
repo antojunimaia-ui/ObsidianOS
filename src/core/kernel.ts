@@ -15,107 +15,57 @@ import { Lexer } from './osl/lexer';
 import { Parser } from './osl/parser';
 import { Interpreter } from './osl/interpreter';
 
-export type KernelLogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL' | 'FATAL';
+// ── Modular kernel: composed managers (see src/core/kernel/) ───────────────
+import type { BootPhase, BSODInfo, DriverEntry, KernelLogLevel, ServiceEntry } from './kernel/types';
+import { EventBus } from './kernel/event-bus';
+import { Logger } from './kernel/logger';
+import { SystemState } from './kernel/system-state';
+import { ResourceManager } from './kernel/resources';
+import { FaultManager } from './kernel/faults';
+import { PmMemoryManager } from './kernel/pmem';
+import { encodePmData } from './pm/address-space';
+import { PmAddressSpace } from './pm/address-space';
+import { base64ToBytes } from './pm/codec';
 
+// Re-exported so existing importers (e.g. BSOD.tsx) keep working.
+export type {
+  KernelLogLevel, KernelLogEntry, DriverEntry, ServiceEntry, SystemResource,
+  KernelInterrupt, BootPhase, BSODInfo, CascadeStep, CascadeState,
+} from './kernel/types';
 
-export interface KernelLogEntry {
-  timestamp: number;
-  level: KernelLogLevel;
-  source: string;
-  message: string;
-  code?: string;
-}
-
-export interface DriverEntry {
-  name: string;
-  path: string;       // Path in virtual FS
-  status: 'loaded' | 'failed' | 'not_found' | 'disabled';
-  type: 'kernel' | 'filesystem' | 'network' | 'display' | 'input' | 'audio' | 'storage';
-  loadOrder: number;
-  dependencies: string[];
-  errorMessage?: string;
-}
-
-export interface ServiceEntry {
-  name: string;
-  displayName: string;
-  description: string;
-  executablePath: string;   // Must exist in FS
-  registryPath: string;     // Registry key that defines this
-  status: 'running' | 'stopped' | 'failed' | 'starting' | 'stopping';
-  startType: 'auto' | 'manual' | 'disabled' | 'boot' | 'system';
-  pid?: number;
-  dependencies: string[];
-  errorMessage?: string;
-  restartCount: number;
-}
-
-export interface SystemResource {
-  totalMemory: number;      // MB
-  usedMemory: number;
-  totalDisk: number;        // MB
-  usedDisk: number;
-  cpuCores: number;
-  cpuUsage: number;         // 0-100
-  uptime: number;           // seconds
-  networkUp: boolean;
-}
-
-export interface KernelInterrupt {
-  irq: number;
-  handler: string;
-  description: string;
-}
-
-export type BootPhase =
-  | 'OFF'
-  | 'BIOS_POST'         // Power-On Self Test
-  | 'BIOS_HARDWARE'     // Hardware detection
-  | 'BOOTLOADER'        // Loading bootloader from boot.ini
-  | 'KERNEL_INIT'       // Loading ntoskrnl.exe
-  | 'HAL_INIT'          // Hardware Abstraction Layer
-  | 'DRIVER_LOAD'       // Loading drivers
-  | 'REGISTRY_LOAD'     // Loading registry hives
-  | 'SERVICE_INIT'      // Starting services
-  | 'SUBSYSTEM_INIT'    // Win32 subsystem (csrss.exe)
-  | 'SESSION_MANAGER'   // Session Manager (smss.exe)
-  | 'WINLOGON'          // Login subsystem
-  | 'SHELL_INIT'        // Loading explorer.exe (shell)
-  | 'OOBE'              // Out-Of-Box Experience (Initial Setup)
-  | 'DESKTOP_READY'     // Desktop environment ready
-  | 'BOOT_FAILURE'      // Critical failure during boot
-  | 'BSOD';             // Blue Screen of Death
-
-export interface BSODInfo {
-  stopCode: string;
-  technicalInfo: string;
-  failedComponent: string;
-  bugCheckCode: string;
-  parameters: string[];
-}
+// Kernel domain types live in ./kernel/types.ts (re-exported above).
 
 class Kernel {
   private static instance: Kernel;
   
-  // State
+  // ── Composed managers ────────────────────────────────────────────────
+  // The Kernel is the façade (singleton + public API + orchestration).
+  // Domain state/logic lives in src/core/kernel/* managers.
+  private _bus: EventBus;
+  private _logger: Logger;
+  private _system: SystemState;
+  private _resourcesMgr: ResourceManager;
+  private _faults: FaultManager;
+  private _pmem: PmMemoryManager;
+  private _pmSystemInfo: { blockSize: number; blockCount: number; path: string } | null = null;
+  private _powerOnPromise: Promise<void> | null = null;
+
+  // ── Boot / lifecycle ───────────────────────────────────────────────────
   private _bootPhase: BootPhase = 'OFF';
-  private _logs: KernelLogEntry[] = [];
-  private _drivers: Map<string, DriverEntry> = new Map();
-  private _services: Map<string, ServiceEntry> = new Map();
-  private _resources: SystemResource;
-  private _bsodInfo: BSODInfo | null = null;
-  private _bootLog: string[] = [];
-  private _listeners: Map<string, Set<(...args: any[]) => void>> = new Map();
-  private _uptimeInterval: ReturnType<typeof setInterval> | null = null;
-  private _initTime: number = 0;
   private _isInitialized: boolean = false;
   private _isBooting: boolean = false;
   private _isBootFinished: boolean = false;
   private _shellLoaded: boolean = false;
+  private _lsassAuthTimeout = 5000;
 
   // ── Process Table ──────────────────────────────────────────────────────────
   private _processes: Map<number, Process> = new Map();
+  private _processesByName: Map<string, Process> = new Map(); // name → latest process
   private _nextPid: number = 100;
+
+  // ── Dynamic Process Registry (populated by processes themselves) ──────────
+  // Each process registers as critical via syscall. Now owned by FaultManager.
+  // Dependencies are declared via OS.declareDependency().
 
   // ── Scheduler ─────────────────────────────────────────────────────────────
   // Round-Robin with priority queues (5 levels, REALTIME→IDLE)
@@ -150,6 +100,8 @@ class Kernel {
   private _bootConfig: BootConfig | null = null;
 
   // ── File System ────────────────────────────────────────────────────────────
+  // (persistence/snapshot logic unchanged; a future FileSystemManager slice
+  //  will own this Map — see system-state.ts/resources.ts for the pattern).
   private _filesystem: Map<string, FileSystemNode> = new Map();
   private _diskDriver: OPFSDriver | null = null;
 
@@ -160,32 +112,41 @@ class Kernel {
   private _registry: Record<string, Record<string, RegistryEntry>> = {};
 
   // ── System State ───────────────────────────────────────────────────────────
-  private _user: UserProfile = {
-    username: 'user', displayName: 'User', avatar: '', password: '',
-    isAdmin: true, lastLogin: Date.now(),
-  };
-  private _isLocked: boolean = false;
-  private _theme: SystemTheme = {
-    mode: 'dark', accentColor: '#6366f1', wallpaper: 'default',
-    transparency: true, animationSpeed: 'normal', fontSize: 'medium',
-  };
-  private _hardware = {
-    volume: 75, isMuted: false, brightness: 100,
-    isWifiConnected: true, isBluetooth: false, batteryLevel: 85,
-  };
+  // Owned by SystemState (src/core/kernel/system-state.ts).
 
   private constructor() {
-    this._resources = {
-      totalMemory: 8192,
-      usedMemory: 0,
-      totalDisk: 256000,
-      usedDisk: 42000,
-      cpuCores: navigator.hardwareConcurrency || 8,
-      cpuUsage: 0,
-      uptime: 0,
-      networkUp: false,
-    };
-    this._initSystemState();
+    // Composition root: bus → logger → resources → faults → system.
+    // Hooks are deferred closures, so construction order is cycle-safe.
+    this._bus = new EventBus((event, e) => {
+      this.log('ERROR', 'Kernel', `Event handler error: ${event}: ${e}`);
+    });
+    this._logger = new Logger(this._bus, (entry) => {
+      this._faults.triggerBSOD({
+        stopCode: entry.code || 'CRITICAL_PROCESS_DIED',
+        technicalInfo: entry.message,
+        failedComponent: entry.source,
+        bugCheckCode: '0x000000EF',
+        parameters: [entry.source, entry.message],
+      });
+    });
+    this._resourcesMgr = new ResourceManager(this._bus, {
+      onMemoryExhausted: (used, total) => {
+        this.triggerBSOD({
+          stopCode: 'MEMORY_MANAGEMENT',
+          technicalInfo: `Physical memory exhausted. Used: ${used}MB / Total: ${total}MB`,
+          failedComponent: 'ntoskrnl.exe',
+          bugCheckCode: '0x0000001A',
+          parameters: ['0x00000417', '0x00000000', '0x00000000', '0x00000000'],
+        });
+      },
+      log: (level, source, message, code) => this.log(level, source, message, code),
+    });
+    this._faults = new FaultManager(this._bus, this, {
+      log: (level, source, message) => this.log(level, source, message),
+      onBSOD: (info) => this.handleBSOD(info),
+    });
+    this._system = new SystemState(this._bus);
+    this._pmem = new PmMemoryManager();
     this._initFileSystem();
     this._initRegistry();
     this._initSystemProcesses();
@@ -193,7 +154,19 @@ class Kernel {
   }
 
   // ========== THE BIOS (NATIVE BOOT) ==========
-  async powerOn() {
+  // Coalesce concurrent calls (React StrictMode remounts BootScreen):
+  // um único boot por vez, todos os chamadores aguardam o mesmo.
+  async powerOn(): Promise<void> {
+    if (this._powerOnPromise) return this._powerOnPromise;
+    this._powerOnPromise = this.runPowerOn();
+    try {
+      await this._powerOnPromise;
+    } finally {
+      this._powerOnPromise = null;
+    }
+  }
+
+  private async runPowerOn(): Promise<void> {
     if (this._isBooting) return;
     this._isBooting = true;
     try {
@@ -211,6 +184,10 @@ class Kernel {
         // (first boot, or browser without OPFS support)
         this.fsDeepReformat();
       }
+
+      // PM depends on the file: OS memory geometry comes from system.pmem.
+      // No image (even after repair) → no boot.
+      if (!this.loadSystemMemoryImage()) return;
 
       this._isBootFinished = false; // Fresh start
       this.bootPhase = 'BIOS_POST';
@@ -290,6 +267,53 @@ class Kernel {
     }, 150);
   }
 
+  /**
+   * Carrega a geometria da memória do OS a partir do system.pmem.
+   * Ausente ou corrompido → uma tentativa de repair a partir dos
+   * defaults (cobre discos gravados com imagens antigas); se ainda
+   * assim falhar → BSOD (sem o mapa, não há boot).
+   */
+  private loadSystemMemoryImage(): boolean {
+    const path = 'C:\\ObsidianOS\\System32\\config\\system.pmem';
+    let lastError: unknown = 'unknown';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let node = this.fsGetNode(path);
+      if (!node?.content) {
+        this.addBootLog('PM: system.pmem missing. Attempting repair from defaults...');
+        this.fsRepairSystemFiles();
+        node = this.fsGetNode(path);
+      }
+      if (!node?.content) {
+        lastError = 'file still missing after repair';
+        break;
+      }
+      try {
+        const image = PmAddressSpace.importImage(base64ToBytes(node.content));
+        this._pmem.configure(image.blockSize);
+        this._pmSystemInfo = { blockSize: image.blockSize, blockCount: image.blockCount, path };
+        this.addBootLog(`PM: system.pmem loaded (block_size=${image.blockSize}, blocks=${image.blockCount})`);
+        return true;
+      } catch (e) {
+        lastError = e;
+        this.addBootLog(`PM: validation failed (${e}). Repairing from defaults...`);
+        this.fsRepairSystemFiles();
+      }
+    }
+    this.triggerBSOD({
+      stopCode: 'PM_IMAGE_CORRUPT',
+      technicalInfo: `System memory image failed: ${lastError} [${path}]. Boot cannot continue without PM geometry.`,
+      failedComponent: 'system.pmem',
+      bugCheckCode: '0x000000ED',
+      parameters: [path, 'validation', '0x0', '0x0'],
+    });
+    return false;
+  }
+
+  /** Geometria ativa da memória — prova que veio do arquivo. */
+  pmSystemInfo(): { blockSize: number; blockCount: number; path: string } | null {
+    return this._pmSystemInfo ? { ...this._pmSystemInfo } : null;
+  }
+
   async loadShell(): Promise<boolean> {
     // Guard against double execution (React StrictMode / concurrent calls)
     if (this._shellLoaded) return true;
@@ -318,20 +342,17 @@ class Kernel {
     const registryProxy = useAppRegistry.getState();
     await this.scanSystemApps(fsProxy, registryProxy);
     
-    // Create processes
+    // Create processes (memória contabilizada no createProcess + lastro PM)
     this.createProcess('explorer.obx', 'ObsidianOS Explorer', '📁');
-    this._resources.usedMemory += 96;
 
     const dwm = this.fsGetNode('C:\\ObsidianOS\\System32\\dwm.obx');
     if (dwm) {
       this.createProcess('dwm.obx', 'Desktop Window Manager', '🖥️');
-      this._resources.usedMemory += 72;
     }
 
     const searchHost = this.fsGetNode('C:\\ObsidianOS\\System32\\SearchHost.obx');
     if (searchHost) {
       this.createProcess('SearchHost.obx', 'Search Host', '🔍');
-      this._resources.usedMemory += 48;
     }
 
     // Check OOBE flag — if SetupInProgress is set, go to setup wizard first
@@ -349,44 +370,8 @@ class Kernel {
   }
 
 
-  // ========== System Init ==========
-  private _initSystemState() {
-    if (typeof window === 'undefined') return;
-    const saved = localStorage.getItem('obsidianos-system-v2');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        this._user = { ...this._user, ...parsed.user };
-        this._theme = { ...this._theme, ...parsed.theme };
-        this._hardware = { ...this._hardware, ...parsed.hardware };
-      } catch (e) {
-        console.error('Failed to parse obsidianos-system-v2', e);
-      }
-    } else {
-      const legacy = localStorage.getItem('webos-system-v2') || localStorage.getItem('webos-system');
-      if (legacy) {
-        try {
-          const parsed = JSON.parse(legacy);
-          const state = parsed.state || parsed; // Handle different structures
-          if (state) {
-            this._user = { ...this._user, ...(state.user || state.currentUser) };
-            this._theme = { ...this._theme, ...state.theme };
-            this._hardware = {
-              volume: state.volume ?? state.hardware?.volume ?? 75,
-              isMuted: state.isMuted ?? state.hardware?.isMuted ?? false,
-              brightness: state.brightness ?? state.hardware?.brightness ?? 100,
-              isWifiConnected: state.isWifiConnected ?? state.hardware?.isWifiConnected ?? true,
-              isBluetooth: state.isBluetooth ?? state.hardware?.isBluetooth ?? false,
-              batteryLevel: state.batteryLevel ?? state.hardware?.batteryLevel ?? 85,
-            };
-          }
-          this._persistSystemState();
-        } catch (e) {
-          console.error('Failed to parse legacy system state', e);
-        }
-      }
-    }
-  }
+  // System identity/personalization init lives in
+  // SystemState (src/core/kernel/system-state.ts).
 
   // ========== File System Init ==========
   private _initFileSystem() {
@@ -495,33 +480,13 @@ class Kernel {
   }
 
   // ========== System Process Init ==========
-  // Popula a tabela de processos com os processos base do SO.
-  // NÃO emite eventos — a inicialização é silenciosa.
+  // EMPTY — system processes are now created by bootmgr.obx at boot time.
+  // The kernel is a generic execution engine; it doesn't know what processes exist.
   private _initSystemProcesses() {
-    type InitProc = Pick<Process, 'pid' | 'name' | 'title' | 'icon' | 'memoryUsage' | 'cpuUsage'>;
-    // NOTE: 'System' (PID 0) is intentionally absent — it is created by bootmgr.obx
-    // during the boot sequence so it appears as a real boot-time process.
-    // explorer.obx, dwm.obx, SearchHost.obx are created by loadShell().
-    const INITIAL: InitProc[] = [
-      { pid: 1, name: 'smss.obx',    title: 'Session Manager Subsystem',        icon: '⚙️', memoryUsage: 12.1,  cpuUsage: 0 },
-      { pid: 2, name: 'csrss.obx',   title: 'Client Server Runtime Process',    icon: '⚙️', memoryUsage: 45.8,  cpuUsage: 0.2 },
-      { pid: 3, name: 'wininit.obx', title: 'ObsidianOS Start-Up Application',  icon: '⚙️', memoryUsage: 18.5,  cpuUsage: 0 },
-      { pid: 4, name: 'services.obx',title: 'Services and Controller App',      icon: '⚙️', memoryUsage: 82.2,  cpuUsage: 0.3 },
-      { pid: 5, name: 'lsass.obx',   title: 'Local Security Authority Process', icon: '🔒', memoryUsage: 124.4, cpuUsage: 0.1 },
-      { pid: 6, name: 'svchost.obx', title: 'Service Host: Local System',       icon: '⚙️', memoryUsage: 428.6, cpuUsage: 0.5 },
-    ];
-    const startTime = Date.now();
-    let totalRam = 0;
-    INITIAL.forEach(p => {
-      const proc = this._makeProcess(p.pid, p.name, p.title, p.icon, 0, 'NORMAL');
-      proc.memoryUsage = p.memoryUsage;
-      proc.cpuUsage    = p.cpuUsage;
-      proc.startTime   = startTime;
-      this._processes.set(p.pid, proc);
-      this._addToRunQueue(proc);
-      totalRam += p.memoryUsage;
-    });
-    this._resources.usedMemory = totalRam;
+    // Process table is empty at kernel init.
+    // bootmgr.obx creates smss.obx, which creates csrss, lsass, wininit, etc.
+    // Each process self-registers as critical via OS.registerCritical().
+    // Dependencies are declared via OS.declareDependency().
   }
 
   static getInstance(): Kernel {
@@ -531,62 +496,30 @@ class Kernel {
     return Kernel.instance;
   }
 
-  // ========== Event System ==========
+  // ========== Event System (delegated to EventBus) ==========
   on(event: string, callback: (...args: any[]) => void) {
-    if (!this._listeners.has(event)) {
-      this._listeners.set(event, new Set());
-    }
-    this._listeners.get(event)?.add(callback);
-    return () => this.off(event, callback);
+    return this._bus.on(event, callback);
   }
 
   once(event: string, callback: (...args: any[]) => void) {
-    const wrapper = (...args: any[]) => {
-      this.off(event, wrapper);
-      callback(...args);
-    };
-    return this.on(event, wrapper);
+    return this._bus.once(event, callback);
   }
 
   off(event: string, callback: (...args: any[]) => void) {
-    this._listeners.get(event)?.delete(callback);
+    this._bus.off(event, callback);
   }
 
   emit(event: string, ...args: any[]) {
-    this._listeners.get(event)?.forEach(cb => {
-      try { cb(...args); } catch (e) { 
-        this.log('ERROR', 'Kernel', `Event handler error: ${event}: ${e}`);
-      }
-    });
+    this._bus.emit(event, ...args);
   }
 
-  // ========== Logging ==========
+  // ========== Logging (delegated to Logger) ==========
   log(level: KernelLogLevel, source: string, message: string, code?: string) {
-    const entry: KernelLogEntry = {
-      timestamp: Date.now(),
-      level,
-      source,
-      message,
-      code,
-    };
-    this._logs.push(entry);
-    this.emit('log', entry);
-
-    // On FATAL, trigger BSOD
-    if (level === 'FATAL') {
-      this.triggerBSOD({
-        stopCode: code || 'CRITICAL_PROCESS_DIED',
-        technicalInfo: message,
-        failedComponent: source,
-        bugCheckCode: '0x000000EF',
-        parameters: [source, message],
-      });
-    }
+    this._logger.log(level, source, message, code);
   }
 
   addBootLog(message: string) {
-    this._bootLog.push(message);
-    this.emit('bootLog', message);
+    this._logger.addBootLog(message);
   }
 
   // ========== Boot Phase ==========
@@ -623,195 +556,224 @@ class Kernel {
     }
   }
   
-  // ========== System State Management ==========
-  private _emitSystemSnapshot() {
-    this.emit('system:snapshot', {
-      user: this._user,
-      isLocked: this._isLocked,
-      theme: this._theme,
-      hardware: this._hardware,
+  // ========== System State Management (delegated to SystemState) ==========
+  sysGetSnapshot() {
+    return this._system.getSnapshot();
+  }
+
+  /** Public snapshot emitter (replaces the old private hack path). */
+  emitSystemSnapshot() {
+    this._system.emitSnapshot();
+  }
+
+  /** Public persistence (replaces the old private hack path). */
+  persistSystemState() {
+    this._system.persist();
+  }
+
+  /** Public setter so UI layers never touch privates via `as any`. */
+  setCurrentUser(profile: UserProfile) {
+    this._system.setCurrentUser(profile);
+  }
+
+  sysGetUserProfiles(): UserProfile[] {
+    return this._system.getUserProfiles();
+  }
+
+  sysUpdateUserProfile(profile: UserProfile) {
+    this._system.updateUserProfile(profile);
+  }
+
+  // NOTE: credential validation lives in SystemState.validateCredentials and is
+  // exercised by SystemState.login — no dead validators here.
+
+  async sysAuthenticateUser(username: string, password: string): Promise<boolean> {
+    const lsassPid = this._processesByName.get('lsass.obx')?.pid;
+    if (lsassPid === undefined) {
+      this.log('WARN', 'Kernel', 'lsass.obx is dead — authentication service unavailable');
+      return false;
+    }
+
+    return new Promise<boolean>((resolve) => {
+      const requestId = Math.random().toString(36).slice(2);
+      let settled = false;
+
+      const cleanup = this.on(`ipc:0:auth:response:${requestId}`, (msg: any) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(msg.data?.success === true);
+      });
+
+      setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        this.log('WARN', 'Kernel', 'lsass auth request timed out');
+        resolve(false);
+      }, this._lsassAuthTimeout);
+
+      this.emit(`ipc:${lsassPid}:auth:request`, {
+        from: 0,
+        data: { requestId, username, password },
+      });
     });
   }
 
-  private _persistSystemState() {
-    if (typeof window === 'undefined') return;
-    const state = { user: this._user, theme: this._theme, hardware: this._hardware };
-    localStorage.setItem('obsidianos-system-v2', JSON.stringify(state));
-    this._emitSystemSnapshot();
-  }
-
-  sysGetSnapshot() {
-    return {
-      user: this._user,
-      isLocked: this._isLocked,
-      theme: this._theme,
-      hardware: this._hardware,
-    };
-  }
-
   sysLogin(password: string): boolean {
-    if (this._user.password === '' || password === this._user.password) {
-      this._isLocked = false;
-      this._user.lastLogin = Date.now();
-      this._persistSystemState();
-      this.emit('system:bootPhase', 'desktop');
-      return true;
-    }
-    return false;
+    return this._system.login(password);
   }
 
   sysLock() {
-    this._isLocked = true;
-    this._persistSystemState();
-    this.emit('system:bootPhase', 'login');
+    this._system.lock();
   }
 
   sysUnlock() {
-    this._isLocked = false;
-    this._persistSystemState();
-    this.emit('system:bootPhase', 'desktop');
+    this._system.unlock();
   }
 
   sysSetTheme(updates: Partial<SystemTheme>) {
-    this._theme = { ...this._theme, ...updates };
-    this._persistSystemState();
+    this._system.setTheme(updates);
   }
 
   sysSetVolume(volume: number) {
-    this._hardware.volume = Math.max(0, Math.min(100, volume));
-    this._persistSystemState();
+    this._system.setVolume(volume);
   }
 
   sysToggleMute() {
-    this._hardware.isMuted = !this._hardware.isMuted;
-    this._persistSystemState();
+    this._system.toggleMute();
   }
 
   sysSetBrightness(brightness: number) {
-    this._hardware.brightness = Math.max(0, Math.min(100, brightness));
-    this._persistSystemState();
+    this._system.setBrightness(brightness);
   }
 
   sysToggleWifi() {
-    this._hardware.isWifiConnected = !this._hardware.isWifiConnected;
-    this._persistSystemState();
+    this._system.toggleWifi();
   }
 
   sysToggleBluetooth() {
-    this._hardware.isBluetooth = !this._hardware.isBluetooth;
-    this._persistSystemState();
+    this._system.toggleBluetooth();
   }
 
-  // ========== Resources ==========
-  get resources() { return { ...this._resources }; }
-  
+  // ========== Resources (delegated to ResourceManager) ==========
+  get resources() { return this._resourcesMgr.snapshot; }
+
+  /** Public setter replacing the old _resources.totalMemory hack. */
+  setTotalMemory(mb: number) {
+    this._resourcesMgr.setTotalMemory(mb);
+  }
+
   allocateMemory(amount: number, processName: string): boolean {
-    if (this._resources.usedMemory + amount > this._resources.totalMemory) {
-      this.log('ERROR', 'MemoryManager', 
-        `Out of memory: ${processName} requested ${amount}MB, available: ${this._resources.totalMemory - this._resources.usedMemory}MB`,
-        'OUT_OF_MEMORY');
-      return false;
-    }
-    this._resources.usedMemory += amount;
-    this.emit('memoryChange', this._resources);
-    return true;
+    return this._resourcesMgr.allocateMemory(amount, processName);
   }
 
   freeMemory(amount: number) {
-    this._resources.usedMemory = Math.max(0, this._resources.usedMemory - amount);
-    this.emit('memoryChange', this._resources);
+    this._resourcesMgr.freeMemory(amount);
   }
 
   updateCpuUsage(usage: number) {
-    this._resources.cpuUsage = Math.min(100, Math.max(0, usage));
-    this.emit('cpuChange', this._resources);
+    this._resourcesMgr.updateCpuUsage(usage);
   }
 
-  // ========== Drivers ==========
+  // ========== Drivers (delegated to ResourceManager) ==========
   registerDriver(driver: DriverEntry) {
-    this._drivers.set(driver.name, driver);
-    this.emit('driverChange', driver);
+    this._resourcesMgr.registerDriver(driver);
   }
 
-  getDriver(name: string) { return this._drivers.get(name); }
-  getAllDrivers() { return Array.from(this._drivers.values()); }
+  getDriver(name: string) { return this._resourcesMgr.getDriver(name); }
+  getAllDrivers() { return this._resourcesMgr.getAllDrivers(); }
 
-  // ========== Services ==========
+  // ========== Services (delegated to ResourceManager) ==========
   registerService(service: ServiceEntry) {
-    this._services.set(service.name, service);
-    this.emit('serviceChange', service);
+    this._resourcesMgr.registerService(service);
   }
 
-  getService(name: string) { return this._services.get(name); }
-  getAllServices() { return Array.from(this._services.values()); }
+  getService(name: string) { return this._resourcesMgr.getService(name); }
+  getAllServices() { return this._resourcesMgr.getAllServices(); }
 
   updateServiceStatus(name: string, status: ServiceEntry['status'], error?: string) {
-    const service = this._services.get(name);
-    if (service) {
-      service.status = status;
-      if (error) service.errorMessage = error;
-      if (status === 'failed') service.restartCount++;
-      this.emit('serviceChange', service);
-    }
+    this._resourcesMgr.updateServiceStatus(name, status, error);
   }
 
-  // ========== BSOD ==========
-  get bsodInfo() { return this._bsodInfo; }
+  // ========== BSOD (delegated to FaultManager) ==========
+  get bsodInfo() { return this._faults.currentBsod; }
 
   triggerBSOD(info: BSODInfo) {
-    this._bsodInfo = {
-      stopCode: info.stopCode || 'CRITICAL_PROCESS_DIED',
-      technicalInfo: info.technicalInfo || 'No extra info',
-      failedComponent: info.failedComponent || 'Unknown',
-      bugCheckCode: info.bugCheckCode || '0x00000000',
-      parameters: info.parameters || ['0x0', '0x0', '0x0', '0x0'],
-    };
+    this._faults.triggerBSOD(info);
+  }
+
+  /** Single place that flips phase, emits and stops loops on BSOD. */
+  private handleBSOD(info: BSODInfo) {
+    const prev = this._bootPhase;
     this._bootPhase = 'BSOD';
-    this.log('CRITICAL', 'Kernel', 
-      `BSOD: ${info.stopCode} - ${info.technicalInfo}`);
     this.emit('bsod', info);
-    this.emit('bootPhaseChange', 'BSOD', this._bootPhase);
-    
+    this.emit('bootPhaseChange', 'BSOD', prev);
+
     // Stop uptime counter and scheduler
-    if (this._uptimeInterval) clearInterval(this._uptimeInterval);
+    this._resourcesMgr.stopLoops();
     this.stopScheduler();
   }
 
-  // ========== Uptime & Resource Loop ==========
-  startUptimeCounter() {
-    this._initTime = Date.now();
-    this._uptimeInterval = setInterval(() => {
-      this._resources.uptime = Math.floor((Date.now() - this._initTime) / 1000);
-    }, 1000);
-    this.startResourceLoop();
+  // ========== CASCADE FAILURE (delegated to FaultManager) ==========
+  get cascadeState() { return this._faults.cascade; }
+
+  // Called by terminateProcess when a provider dies and has dependents
+  triggerDynamicCascade(providerName: string, dependentNames: string[]) {
+    this._faults.triggerDynamicCascade(providerName, dependentNames);
   }
 
-  private _resourceInterval: ReturnType<typeof setInterval> | null = null;
+  // ── CascadeHost implementation ───────────────────────────────────────
+  // FaultManager drives the cascade; Kernel performs the destruction.
+
+  getProcessByName(name: string): Process | undefined {
+    return this._processesByName.get(name);
+  }
+
+  isBootPhaseBSOD(): boolean {
+    return this._bootPhase === 'BSOD';
+  }
+
+  destroyProcessForCascade(name: string): number | null {
+    const proc = this._processesByName.get(name);
+    if (!proc) return null;
+
+    this._removeFromRunQueues(proc.pid);
+    if ((proc as any).worker) (proc as any).worker.terminate();
+    if ((proc as any)._unbinds) (proc as any)._unbinds.forEach((u: any) => u());
+    this._processes.delete(proc.pid);
+    if (this._processesByName.get(name)?.pid === proc.pid) {
+      this._processesByName.delete(name);
+    }
+    this._pmem.destroySpace(proc.pid);
+
+    for (const win of Array.from(this._windows.values())) {
+      if (win.processId === proc.pid) this._windows.delete(win.id);
+    }
+
+    // Re-evaluate active window
+    const remaining = Array.from(this._windows.values()).filter(w => !w.isMinimized);
+    remaining.sort((a, b) => b.zIndex - a.zIndex);
+    if (remaining.length > 0) {
+      const top = remaining[0];
+      this._windows.set(top.id, { ...top, isActive: true });
+      this._activeWindowId = top.id;
+    } else {
+      this._activeWindowId = null;
+    }
+    this._emitWindowSnapshot();
+    this.recomputeMemoryLedger();
+
+    return proc.pid;
+  }
+
+  // ========== Uptime & Resource Loop (delegated to ResourceManager) ==========
+  startUptimeCounter() {
+    this._resourcesMgr.startUptimeCounter();
+  }
 
   startResourceLoop() {
-    if (this._resourceInterval) clearInterval(this._resourceInterval);
-    
-    this._resourceInterval = setInterval(() => {
-      // In a real OS, the scheduler/kernel calculates this. 
-      // We will pull from the processManager store directly to sync.
-      // Note: We'll use a dynamic import or access the store via global if needed, 
-      // but here we can just emit an event and let the stores respond or vice versa.
-      // Better: The kernel is the source of truth, but since processManager 
-      // is a store, we'll let it push updates or the kernel can pull if it has access.
-      
-      this.emit('resourceTick');
-      
-      // Check for Memory Overload
-      if (this._resources.usedMemory > this._resources.totalMemory) {
-         this.triggerBSOD({
-            stopCode: 'MEMORY_MANAGEMENT',
-            technicalInfo: `Physical memory exhausted. Used: ${this._resources.usedMemory}MB / Total: ${this._resources.totalMemory}MB`,
-            failedComponent: 'ntoskrnl.exe',
-            bugCheckCode: '0x0000001A',
-            parameters: ['0x00000417', '0x00000000', '0x00000000', '0x00000000']
-         });
-      }
-    }, 2000);
+    this._resourcesMgr.startResourceLoop();
   }
 
   // ========== App Discovery ==========
@@ -915,6 +877,114 @@ class Kernel {
   getFsNodeCount(): number { return this._filesystem.size; }
   isDiskDriverActive(): boolean { return this._diskDriver !== null; }
 
+  /** Public accessor replacing the (kernel as any)._diskDriver hack. */
+  getDiskDriver(): OPFSDriver | null { return this._diskDriver; }
+
+  // ========== PM address spaces (memória real por processo) ==========
+  pmStats() { return this._pmem.stats(); }
+  pmSpaceStats(pid: number) { return this._pmem.spaceStats(pid); }
+  pmHasSpace(pid: number) { return this._pmem.hasSpace(pid); }
+  pmRead(pid: number, block: number, offset: number, length: number) {
+    return this._pmem.read(pid, block, offset, length);
+  }
+  pmWrite(pid: number, block: number, offset: number, data: Uint8Array) {
+    this._pmem.write(pid, block, offset, data);
+    this.recomputeMemoryLedger();
+  }
+  pmDefineLabel(pid: number, name: string, block: number, offset: number) {
+    this._pmem.defineLabel(pid, name, block, offset);
+  }
+
+  /**
+   * Uso real de um processo: bytes tocados (committed) no space PM, em MB.
+   * Substitui o número sorteado de antes — isto é medição, não simulação.
+   */
+  liveMemoryUsageMB(pid: number): number {
+    if (!this._pmem.hasSpace(pid)) return 0;
+    return this._pmem.spaceStats(pid).committedBytes / 1048576;
+  }
+
+  /**
+   * Re-deriva o razão: soma dos usos reais + overhead avulso, e avisa
+   * os espelhos (process:updated) quando o número de alguém mudou.
+   */
+  recomputeMemoryLedger(): void {
+    let total = this._resourcesMgr.adhocOverheadMB();
+    for (const proc of this._processes.values()) {
+      const live = this.liveMemoryUsageMB(proc.pid);
+      total += live;
+      if (proc.memoryUsage !== live) {
+        const updated: Process = { ...proc, memoryUsage: live };
+        this._processes.set(proc.pid, updated);
+        this.emit('process:updated', updated);
+      }
+    }
+    this._resourcesMgr.setUsedMemory(total);
+  }
+
+  // ========== PM persistência (.pmem no VFS) ==========
+  private static readonly PM_SNAP_DIR = 'C:\\System Volume Information\\MemSnap';
+
+  pmSnapshot(pid: number): string {
+    return this._pmem.snapshot(pid);
+  }
+
+  pmRestore(pid: number, b64: string): void {
+    this._pmem.restore(pid, b64);
+    this.recomputeMemoryLedger();
+  }
+
+  /** Hiberna: salva o space de cada processo com memória em *.pmem. */
+  pmHibernate(): string[] {
+    const dir = Kernel.PM_SNAP_DIR;
+    if (!this.fsExists(dir)) {
+      this.fsCreateDirectory('C:\\System Volume Information', 'MemSnap');
+    }
+    const written: string[] = [];
+    for (const proc of this.getProcesses()) {
+      if (!this._pmem.hasSpace(proc.pid)) continue;
+      try {
+        const b64 = this._pmem.snapshot(proc.pid);
+        this.fsCreateFile(dir, `${proc.pid}.pmem`, b64, 'pmem');
+        written.push(`${dir}\\${proc.pid}.pmem`);
+      } catch (e) {
+        this.log('ERROR', 'PM', `Snapshot failed for PID:${proc.pid}: ${e}`);
+      }
+    }
+    return written;
+  }
+
+  /** Resume: recarrega spaces a partir dos *.pmem do diretório. */
+  pmResumeSnapshots(): number {
+    const dir = Kernel.PM_SNAP_DIR;
+    if (!this.fsExists(dir)) return 0;
+    let count = 0;
+    for (const node of this.fsGetChildren(dir)) {
+      if (node.extension !== 'pmem' || !node.content) continue;
+      const pid = parseInt(node.name.replace(/\.pmem$/, ''), 10);
+      if (!Number.isInteger(pid)) continue;
+      try {
+        this._pmem.restore(pid, node.content);
+        count++;
+      } catch (e) {
+        this.log('ERROR', 'PM', `Resume failed for ${node.path}: ${e}`);
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Auditoria honesta: compara o razão (usedMemory) com o lastro real
+   * (bytes reservados nos address spaces PM). Binários podem reservar
+   * orçamento via OS.allocateMemory sem lastro — o delta revela isso.
+   */
+  pmAudit(): { ledgerMB: number; backedMB: number; deltaMB: number; match: boolean } {
+    const ledgerMB = this._resourcesMgr.snapshot.usedMemory;
+    const backedMB = this._pmem.stats().committedBytes / 1048576;
+    const deltaMB = Math.abs(ledgerMB - backedMB);
+    return { ledgerMB, backedMB, deltaMB, match: deltaMB < 1 };
+  }
+
   // Startup Repair — restores missing/corrupted system files.
   // Prefers VSS snapshot (C:\System Volume Information\VSS\snapshot.json) over hardcoded defaults.
   async fsStartupRepair(): Promise<{ fixed: number; files: string[] }> {
@@ -1017,9 +1087,10 @@ class Kernel {
     const pid = this._nextPid++;
     const proc = this._makeProcess(pid, name, title, icon, 0, priority);
     proc.windowId = windowId;
-    this.allocateMemory(proc.memoryUsage, name);
     this._processes.set(pid, proc);
-    this._addToRunQueue(proc);
+    this._processesByName.set(name, proc); // track by name for cascade lookup
+    this._pmem.createSpace(pid); // address space PM real (uso nasce em 0)
+    this.recomputeMemoryLedger();
     this.log('DEBUG', 'ProcessManager', `Created: ${name} [PID:${pid}] priority=${priority}`);
     this.emit('process:created', proc);
 
@@ -1042,14 +1113,14 @@ class Kernel {
       quantumUsed: 0,
       totalCpuTime: 0,
       lastScheduled: Date.now(),
-      memoryUsage: Math.random() * 80 + 30,
+      memoryUsage: 0, // derivado de bytes tocados (live em getProcesses)
       cpuUsage: 0,
       pendingSignals: [],
       signalHandlers: {},
       startTime: Date.now(),
       windowId: undefined,
       currentDirectory: 'C:\\Users\\User',
-      stdin: [],
+      // stdin vive no mailbox PM (bloco 0) — sem fila JS.
       // legacy compat
       status: 'running',
     };
@@ -1067,14 +1138,15 @@ class Kernel {
     }
   }
 
-  // ── I/O ────────────────────────────────────────────────────────────────────
+  // ── I/O (stdin vive em bytes PM: mailbox no bloco 0 do space) ──────────
   writeStdin(pid: number, data: string) {
     const proc = this._processes.get(pid);
     if (!proc) return;
-    
-    proc.stdin.push(data);
+
+    this._pmem.stdinPush(pid, data);
     this.log('DEBUG', 'Kernel', `Stdin [PID:${pid}]: ${data}`);
     this.emit(`process:stdin:${pid}`, data);
+    this.recomputeMemoryLedger();
   }
 
   readStdin(pid: number): Promise<string> {
@@ -1082,16 +1154,16 @@ class Kernel {
       const proc = this._processes.get(pid);
       if (!proc) { resolve(''); return; }
 
-      if (proc.stdin.length > 0) {
-        resolve(proc.stdin.shift()!);
+      const first = this._pmem.stdinShift(pid);
+      if (first !== null) {
+        resolve(first);
         return;
       }
 
       // Wait for input
-      const handler = (data: string) => {
+      const handler = () => {
         this.off(`process:stdin:${pid}`, handler);
-        proc.stdin.shift(); // Remove it as we just read it
-        resolve(data);
+        resolve(this._pmem.stdinShift(pid) ?? '');
       };
       this.on(`process:stdin:${pid}`, handler);
     });
@@ -1124,6 +1196,7 @@ class Kernel {
     const OS: Record<string, any> = {
       pid,
       args,
+      getPid: () => pid,
       // ── I/O ──────────────────────────────────────────────────────────────
       print:     (msg: string) => { this.emit('process:stdout', { pid, message: String(msg) }); this.log('DEBUG', `Proc:${pid}`, String(msg)); },
       error:     (msg: string) => { this.emit('process:stderr', { pid, message: String(msg) }); this.log('ERROR', `Proc:${pid}`, String(msg)); },
@@ -1137,7 +1210,27 @@ class Kernel {
       // ── Process ───────────────────────────────────────────────────────────
       terminate:       (exitCode: number = 0) => { this.log('INFO', `Proc:${pid}`, `Exit(${exitCode})`); this.terminateProcess(pid); },
       createProcess:   (n: string, t: string, i: string) => this.createProcess(n, t, i),
+      spawn:           (n: string, t: string, i: string, binPath: string) => this.createProcess(n, t, i, undefined, binPath),
       allocateMemory:  (mb: number, name: string) => this.allocateMemory(mb, name),
+      // ── Dynamic Process Registration (populated by system processes themselves) ──
+      registerCritical: (stopCode: string, technical: string, component: string, bugCheck: string) => {
+        this._faults.registerCritical(proc.name, { stopCode, technical, component: component || proc.name, bugCheck });
+      },
+      declareDependency: (providerName: string) => {
+        this._faults.declareDependency(proc.name, providerName);
+      },
+      // ── IPC: send/receive between processes ────────────────────────────────
+      ipcSend: (targetPid: number, channel: string, data: any) => {
+        this.emit(`ipc:${targetPid}:${channel}`, { from: pid, data });
+      },
+      ipcListen: (channel: string, callback: (msg: { from: number; data: any }) => void) => {
+        return this.on(`ipc:${pid}:${channel}`, callback);
+      },
+      // ── Get PID of another process by name ─────────────────────────────────
+      getPidByName: (name: string) => {
+        const p = this._processesByName.get(name);
+        return p ? p.pid : -1;
+      },
       // ── Signals ───────────────────────────────────────────────────────────
       signal:          (targetPid: number, sig: Signal) => this.sendSignal(targetPid, sig),
       onSignal:        (sig: Signal, fn: string) => this.installSignalHandler(pid, sig, 'CUSTOM', fn),
@@ -1166,21 +1259,36 @@ class Kernel {
         }
       },
       // ── Resources ─────────────────────────────────────────────────────────
-      getResources:  () => ({ ...this._resources }),
-      getEnv:        (key: string) => key === 'OS' ? 'ObsidianOS_NT' : key === 'USER' ? this._user.username : '',
+      getResources:  () => this.resources,
+      getEnv:        (key: string) => key === 'OS' ? 'ObsidianOS_NT' : key === 'USER' ? this._system.getCurrentUser().username : '',
+      getUserProfiles: () => this.sysGetUserProfiles(),
       getTimestamp:  () => Date.now(),
       ping:          () => ({ status: 'ok', latency: Math.floor(Math.random() * 20) + 1 }),
       wait:          (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
       stdin: {
         read: () => this.readStdin(pid),
       },
+      // ── PM address space (memória real do processo) ───────────────────
+      memRead: (block: number, offset: number, length: number) =>
+        this.pmRead(pid, block, offset, length),
+      memReadText: (block: number, offset: number, length: number) => {
+        const bytes = this.pmRead(pid, block, offset, length);
+        let end = bytes.indexOf(0);
+        if (end === -1) end = bytes.length;
+        return new TextDecoder().decode(bytes.slice(0, end));
+      },
+      memWrite: (block: number, offset: number, data: string | number | Uint8Array | number[]) =>
+        this.pmWrite(pid, block, offset, encodePmData(data)),
+      memStats: () => this.pmSpaceStats(pid),
+      memDefineLabel: (name: string, block: number, offset: number) =>
+        this.pmDefineLabel(pid, name, block, offset),
       // ── Namespaced aliases (for obslogon.exe and other system binaries) ───
       Registry: {
         GetValue: (key: string, val: string) => this.regGetValue(`${key}\\${val}`),
         SetValue: (key: string, val: string, type: any, value: any) => this.regSetValue(`${key}\\${val}`, type, value),
       },
       User: {
-        IsAuthenticated: () => !this._isLocked && this._isInitialized,
+        IsAuthenticated: () => !this._system.locked && this._isInitialized,
       },
       Process: {
         Create: (n: string, t: string, i: string) => this.createProcess(n, t, i),
@@ -1212,7 +1320,7 @@ class Kernel {
     const sdkFolder     = path.startsWith('C:\\ObsidianOS\\SDK');
     const progFiles     = path.startsWith('C:\\Program Files');
     const userDocs      = path.startsWith('C:\\Users');
-    const ring0Binaries = ['bootmgr.obx', 'obslogon.obx', 'services.obx', 'lsass.obx'];
+    const ring0Binaries = ['bootmgr.obx', 'obslogon.obx', 'smss.obx', 'csrss.obx', 'lsass.obx', 'services.obx', 'svchost.obx', 'dwm.obx', 'explorer.obx', 'wininit.obx', 'searchhost.obx'];
 
     // Run on main thread (with full kernel/DOM access) for:
     //  • ring-0 system binaries (bootmgr, lsass…)
@@ -1369,17 +1477,6 @@ class Kernel {
     }
   }
 
-  // Processes that must never be terminated — killing them triggers BSOD
-  private static readonly CRITICAL_PROCESSES: Record<string, { stopCode: string; component: string; technical: string; bugCheck: string }> = {
-    'System':        { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'ntoskrnl.obx', technical: 'The System kernel process was terminated.',                                           bugCheck: '0x000000EF' },
-    'smss.obx':     { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'smss.obx',     technical: 'Session Manager Subsystem process died.',                                             bugCheck: '0x000000EF' },
-    'csrss.obx':    { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'csrss.obx',    technical: 'Client Server Runtime Process died.',                                                 bugCheck: '0x000000EF' },
-    'wininit.obx':  { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'wininit.obx',  technical: 'Windows Start-Up Application stopped.',                                              bugCheck: '0x000000EF' },
-    'lsass.obx':    { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'lsass.obx',    technical: 'Local Security Authority Process encountered a critical error.',                     bugCheck: '0x000000EF' },
-    'services.obx': { stopCode: 'CRITICAL_PROCESS_DIED',       component: 'services.obx', technical: 'Services and Controller App stopped.',                                               bugCheck: '0x000000EF' },
-    'dwm.obx':      { stopCode: 'DESKTOP_WINDOW_MANAGER_DIED', component: 'dwm.obx',      technical: 'Desktop Window Manager (DWM) encountered a fatal error and could not be restarted.', bugCheck: '0x000000EF' },
-  };
-
   terminateProcess(pid: number) {
     const proc = this._processes.get(pid);
     if (!proc) return;
@@ -1398,8 +1495,13 @@ class Kernel {
        (proc as any)._unbinds.forEach((u: any) => u());
     }
 
-    this.freeMemory(proc.memoryUsage);
     this._processes.delete(pid);
+    // Keep _processesByName in sync — only clear if this process is the latest for its name
+    if (this._processesByName.get(proc.name)?.pid === pid) {
+      this._processesByName.delete(proc.name);
+    }
+    this._pmem.destroySpace(pid);
+    this.recomputeMemoryLedger();
     
     // Close associated windows
     for (const win of Array.from(this._windows.values())) {
@@ -1425,17 +1527,24 @@ class Kernel {
     this.log('DEBUG', 'ProcessManager', `Terminated: ${proc.name} [PID:${pid}]`);
     this.emit('process:terminated', pid);
 
-    // Trigger BSOD if a critical process was killed (only when desktop is running)
-    if (this._isInitialized && this._bootPhase !== 'BSOD') {
-      const critical = Kernel.CRITICAL_PROCESSES[proc.name];
-      if (critical) {
-        setTimeout(() => this.triggerBSOD({
-          stopCode: critical.stopCode,
-          technicalInfo: critical.technical,
-          failedComponent: critical.component,
-          bugCheckCode: critical.bugCheck,
-          parameters: ['0x00000000', '0x00000000', '0x00000000', '0x00000000'],
-        }), 100);
+    // DYNAMIC CASCADE: Check if any process depends on this one
+    if (this._isInitialized && this._bootPhase !== 'BSOD' && !this._faults.isCascadeActive) {
+      // Find processes that declared dependency on this one
+      const dependents = this._faults.getDependents(proc.name);
+      if (dependents && dependents.size > 0) {
+        this.log('CRITICAL', 'Kernel', `Provider "${proc.name}" terminated — ${dependents.size} dependent(s) will fail`);
+        this.triggerDynamicCascade(proc.name, Array.from(dependents));
+      }
+      // Also check if this was a self-declared critical process
+      const criticalInfo = this._faults.getCritical(proc.name);
+      if (criticalInfo && !dependents?.size) {
+        this.triggerBSOD({
+          stopCode: criticalInfo.stopCode,
+          technicalInfo: criticalInfo.technical,
+          failedComponent: criticalInfo.component,
+          bugCheckCode: criticalInfo.bugCheck,
+          parameters: [proc.name, '0x00000000', '0x00000000', '0x00000000'],
+        });
       }
     }
   }
@@ -1467,11 +1576,13 @@ class Kernel {
   }
 
   updateProcessMemory(pid: number, memory: number) {
+    // Depreciado: uso agora é derivado dos bytes tocados no space PM.
+    // A escrita manual foi desligada para o número nunca mais ser chute.
+    void memory;
     const proc = this._processes.get(pid);
     if (!proc) return;
-    const updated: Process = { ...proc, memoryUsage: memory };
-    this._processes.set(pid, updated);
-    this.emit('process:updated', updated);
+    this.log('WARN', 'Kernel', `updateProcessMemory(${pid}) ignored: usage is PM-derived.`);
+    this.recomputeMemoryLedger();
   }
 
   // ========== Scheduler ==========
@@ -1508,8 +1619,8 @@ class Kernel {
     }
 
     if (active.length === 0) {
-      this._resources.cpuUsage = 0;
-      this.emit('cpuChange', this._resources);
+      this._resourcesMgr.setCpuUsageRaw(0);
+      this._resourcesMgr.emitCpuChange();
       return;
     }
 
@@ -1561,9 +1672,9 @@ class Kernel {
       const p = this._processes.get(proc.pid)!;
       weightedSum += p.cpuUsage * (weights[p.priority] / totalWeight);
     }
-    this._resources.cpuUsage = Math.min(100, parseFloat(weightedSum.toFixed(1)));
-    this.emit('cpuChange', this._resources);
-    this.emit('scheduler:tick', { processes: this.getProcesses(), cpuUsage: this._resources.cpuUsage });
+    this._resourcesMgr.setCpuUsageRaw(Math.min(100, parseFloat(weightedSum.toFixed(1))));
+    this._resourcesMgr.emitCpuChange();
+    this.emit('scheduler:tick', { processes: this.getProcesses(), cpuUsage: this._resourcesMgr.snapshot.cpuUsage });
   }
 
   setPriority(pid: number, priority: ProcessPriority) {
@@ -1748,7 +1859,10 @@ class Kernel {
   }
 
   getProcesses(): Process[] {
-    return Array.from(this._processes.values());
+    return Array.from(this._processes.values()).map((p) => ({
+      ...p,
+      memoryUsage: this.liveMemoryUsageMB(p.pid),
+    }));
   }
 
   getRunningProcesses(): Process[] {
@@ -2187,8 +2301,8 @@ class Kernel {
   getVisibleWindows(): WindowState[] { return this.getWindows().filter(w => !w.isMinimized); }
 
   // ========== Getters ==========
-  get logs() { return [...this._logs]; }
-  get bootLog() { return [...this._bootLog]; }
+  get logs() { return this._logger.getLogs(); }
+  get bootLog() { return this._logger.getBootLog(); }
   get isInitialized() { return this._isInitialized; }
   set isInitialized(v: boolean) { this._isInitialized = v; }
   get topZIndex() { return this._topZIndex; }
@@ -2206,29 +2320,25 @@ class Kernel {
     this._isBooting = false;
     this._isBootFinished = false;
     this._bootPhase = 'OFF';
-    this._logs = [];
-    this._drivers.clear();
-    this._services.clear();
-    this._bsodInfo = null;
-    this._bootLog = [];
-    this._resources.usedMemory = 0;
-    this._resources.cpuUsage = 0;
-    this._resources.uptime = 0;
+    this._logger.reset();
+    this._resourcesMgr.reset();
+    this._faults.reset();
+    this._pmem.reset();
     this._isInitialized = false;
     this._shellLoaded = false;
     this._diskDriver = null;
     // Reset lists
     this._processes.clear();
+    this._processesByName.clear();
     this._windows.clear();
     this._nextPid = 100;
     this._topZIndex = 100;
     this._activeWindowId = null;
     
-    this._initSystemState();
+    this._system.reset();
     this._initFileSystem();
     this._initRegistry();
     this._initSystemProcesses();
-    if (this._uptimeInterval) clearInterval(this._uptimeInterval);
     this.emit('reset'); // store mirrors ouvem e sincronizam
   }
 }

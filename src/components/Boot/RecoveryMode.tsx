@@ -264,8 +264,7 @@ function RecoveryTerminal({ onClose }: { onClose: () => void }) {
       case 'format /confirm':
         addLine('Formatando disco...', 'system');
         (async () => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const driver = (kernel as any)._diskDriver;
+          const driver = kernel.getDiskDriver();
           if (driver) await driver.formatDisk(kernel.getDefaultNodes());
           localStorage.clear();
           addLine('Disco formatado. Reiniciando...', 'system');
@@ -402,10 +401,9 @@ export default function RecoveryMode() {
     setBusy(true);
     setStatus('Formatando disco...');
     setStatusType('busy');
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const driver = (kernel as any)._diskDriver;
-      if (driver) await driver.formatDisk(kernel.getDefaultNodes());
+      try {
+        const driver = kernel.getDiskDriver();
+        if (driver) await driver.formatDisk(kernel.getDefaultNodes());
       localStorage.clear();
       setStatus('Disco formatado. Reiniciando...');
       setStatusType('ok');

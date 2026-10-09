@@ -1,7 +1,8 @@
-import type { 
+import type {
   Program, Statement, Expression, SystemCallExpression
 } from './types';
 import { Environment } from './environment';
+import { encodePmData } from '../pm/address-space';
 import kernel from '../kernel';
 
 export class ReturnValue {
@@ -236,6 +237,49 @@ export class Interpreter {
       case 'fs_list': {
         const path = args[0] || kernel.getProcess(this.pid)?.currentDirectory || "C:\\";
         return kernel.fsGetChildren(path).map((n: any) => n.name).join(", ");
+      }
+      case 'mem_stats': {
+        const s = kernel.pmSpaceStats(this.pid);
+        return `blocks:${s.blockCount} reserved:${s.reservedBytes}B committed:${s.committedBytes}B labels:${s.labelCount}`;
+      }
+      case 'mem_write': {
+        // mem::write(block, offset, value) — value: texto ou número
+        kernel.pmWrite(this.pid, args[0], args[1], encodePmData(args[2] ?? ''));
+        return true;
+      }
+      case 'mem_read': {
+        // mem::read(block, offset, length) → texto (até o NUL)
+        const bytes = kernel.pmRead(this.pid, args[0], args[1], args[2] ?? 64);
+        let end = bytes.indexOf(0);
+        if (end === -1) end = bytes.length;
+        return new TextDecoder().decode(bytes.slice(0, end));
+      }
+      case 'mem_label': {
+        // mem::label(nome, block, offset)
+        kernel.pmDefineLabel(this.pid, args[0], args[1], args[2]);
+        return true;
+      }
+      case 'mem_snap': {
+        // mem::snap() — hiberna o próprio space em *.pmem
+        const dir = 'C:\\System Volume Information\\MemSnap';
+        if (!kernel.fsExists(dir)) {
+          kernel.fsCreateDirectory('C:\\System Volume Information', 'MemSnap');
+        }
+        const b64 = kernel.pmSnapshot(this.pid);
+        kernel.fsCreateFile(dir, `${this.pid}.pmem`, b64, 'pmem');
+        return `${dir}\\${this.pid}.pmem (${b64.length} chars)`;
+      }
+      case 'mem_resume': {
+        // mem::resume() — recarrega o próprio space do *.pmem
+        const path = `C:\\System Volume Information\\MemSnap\\${this.pid}.pmem`;
+        const node = kernel.fsGetNode(path);
+        if (!node?.content) throw new Error(`No snapshot at ${path} (run mem::snap() first).`);
+        kernel.pmRestore(this.pid, node.content);
+        return true;
+      }
+      case 'mem_audit': {
+        const a = kernel.pmAudit();
+        return `ledger:${a.ledgerMB.toFixed(2)}MB backed:${a.backedMB.toFixed(2)}MB match:${a.match}`;
       }
       default:
         throw new Error(`Unknown system call: system::${expr.method}`);

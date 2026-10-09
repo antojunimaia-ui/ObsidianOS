@@ -11,4 +11,5 @@ export const appExes: [string, string, string, string, string, string, string][]
   ['C:\\Program Files\\ObsidianOS Apps\\obsrecord.obx', 'obsrecord.obx', 'C:\\Program Files\\ObsidianOS Apps', 'obs-record', '🎥', 'multimedia', 'ObS Record'],
   ['C:\\Program Files\\ObsidianOS Apps\\mediaplayer.obx', 'mediaplayer.obx', 'C:\\Program Files\\ObsidianOS Apps', 'media-player', '🎬', 'multimedia', 'Media Player'],
   ['C:\\Program Files\\ObsidianOS Apps\\store.obx', 'store.obx', 'C:\\Program Files\\ObsidianOS Apps', 'obsidian-store', '🏪', 'system', 'Obsidian Store'],
+  ['C:\\Program Files\\ObsidianOS Apps\\doom.obx', 'doom.obx', 'C:\\Program Files\\ObsidianOS Apps', 'doom', '👹', 'games', 'DOOM'],
 ];

@@ -21,6 +21,7 @@ const components: Record<string, ReturnType<typeof lazy>> = {
   'media-player': lazy(() => import('../apps/MediaPlayer/MediaPlayer')),
   'obsidian-store': lazy(() => import('../apps/ObsidianStore/ObsidianStore')),
   'sdk-app-runner': lazy(() => import('../apps/SdkAppRunner/SdkAppRunner')),
+  'doom': lazy(() => import('../apps/Doom/Doom')),
   'taskbar': lazy(() => import('../components/Taskbar/Taskbar')),
   'desktop': lazy(() => import('../components/Desktop/Desktop')),
 };

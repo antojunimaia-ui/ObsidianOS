@@ -69,8 +69,7 @@ export interface Process {
   exitCode?: number;
   windowId?: string;
   currentDirectory: string;
-  // I/O
-  stdin: string[];       // Input queue
+  // stdin vive no mailbox PM (bloco 0 do address space) — sem fila JS.
   // Legacy compat
   status: 'running' | 'suspended' | 'terminated';
 }

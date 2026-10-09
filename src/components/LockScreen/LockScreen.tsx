@@ -4,6 +4,7 @@
 import { useState, useEffect } from 'react';
 import { useSystem } from '../../stores/systemStore';
 import { useUserStore } from '../../stores/userStore';
+import kernel from '../../core/kernel';
 import './LockScreen.css';
 
 export default function LockScreen() {
@@ -37,10 +38,15 @@ export default function LockScreen() {
     }
 
     const currentUsername = currentUser?.username || 'Admin';
-    const success = await login(currentUsername, password);
-    if (success) {
+    // Authenticate via lsass (IPC)
+    const authSuccess = await kernel.sysAuthenticateUser(currentUsername, password);
+    if (authSuccess) {
+      // Complete login in kernel (sets _isLocked=false, emits desktop phase)
+      kernel.sysLogin(password);
+      // Also update userStore for UI consistency
+      await login(currentUsername, password);
       setIsUnlocking(true);
-      setTimeout(() => unlock(), 800); // Trigger kernel unlock after animation
+      setTimeout(() => unlock(), 800);
     } else {
       setError(true);
       setPassword('');

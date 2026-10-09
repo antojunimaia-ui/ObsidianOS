@@ -69,6 +69,7 @@ function buildDefaultIcons(): DesktopIconData[] {
     { id: 'obsidian-code', name: 'Obsidian Code',            icon: '⚡',  appId: 'obsidian-code' },
     { id: 'obs-record',    name: 'ObS Record',               icon: '🎥',  appId: 'obs-record' },
     { id: 'calc-gdi',      name: 'Calculadora GDI',          icon: '🧮',  appId: 'sdk:calc_gdi.obx' },
+    { id: 'doom',          name: 'DOOM',                     icon: '👹',  appId: 'doom' },
   ];
   return raw.map((icon, i) => ({
     ...icon,
