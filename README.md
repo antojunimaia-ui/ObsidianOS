@@ -1,6 +1,6 @@
 # 🖥️ ObsidianOS
 
-> Um sistema operacional completo rodando inteiramente no navegador, construído com React, TypeScript e Vite. Simula fielmente a experiência de um OS moderno — com BIOS real, kernel executável, disco virtual OPFS, sistema de arquivos persistente, registro, processos, janelas, BSOD, Recovery Mode, linguagem de script própria (OSL) e muito mais.
+> Um sistema operacional completo rodando inteiramente no navegador, construído com React 19, TypeScript e Vite. Simula com alta fidelidade a arquitetura e a experiência de um OS moderno (inspirado no Windows 11) — incluindo BIOS, kernel preemptivo, escalonador de CPU com sinais POSIX, subsistema de memória persistente (PMEM), janelas Win32/GDI virtuais, disco virtual OPFS, registro multinível, terminal com shell OSL interativo, jogos clássicos (DOOM), simulador de falhas em cascata no BSOD e muito mais.
 
 ---
 
@@ -10,29 +10,31 @@
 2. [Stack Tecnológica](#-stack-tecnológica)
 3. [Estrutura do Projeto](#-estrutura-do-projeto)
 4. [Como Rodar](#-como-rodar)
-5. [Arquitetura do Sistema](#-arquitetura-do-sistema)
-6. [Fluxo de Boot](#-fluxo-de-boot)
-7. [Componentes da Interface](#-componentes-da-interface)
-8. [Aplicativos Integrados](#-aplicativos-integrados)
-9. [OSL — ObsidianOS Scripting Language](#-osl--obsidianos-scripting-language)
-10. [SDK de Aplicativos](#-sdk-de-aplicativos)
-11. [Processos e Drivers do Sistema](#-processos-e-drivers-do-sistema)
-12. [Mecânicas de Realismo](#-mecânicas-de-realismo)
-13. [Como Adicionar um Novo Aplicativo](#-como-adicionar-um-novo-aplicativo)
+5. [Arquitetura do Kernel](#-arquitetura-do-kernel)
+6. [Subsistema de Memória Persistente (PM / PMEM)](#-subsistema-de-memória-persistente-pm--pmem)
+7. [CPU Scheduler, Processos e Sinais](#-cpu-scheduler-processos-e-sinais)
+8. [Fluxo de Boot e Inicialização](#-fluxo-de-boot-e-inicialização)
+9. [Sistema de Arquivos e Registro](#-sistema-de-arquivos-e-registro)
+10. [Motor Gráfico e HwndRenderer](#-motor-gráfico-e-hwndrenderer)
+11. [Aplicativos Integrados](#-aplicativos-integrados)
+12. [OSL — ObsidianOS Scripting Language](#-osl--obsidianos-scripting-language)
+13. [SDK de Aplicativos (.obx)](#-sdk-de-aplicativos-obx)
+14. [Mecânicas de Realismo e Falhas em Cascata (BSOD)](#-mecânicas-de-realismo-e-falhas-em-cascata-bsod)
+15. [Como Adicionar um Novo Aplicativo](#-como-adicionar-um-novo-aplicativo)
 
 ---
 
 ## 🎯 Visão Geral
 
-**ObsidianOS** é uma simulação completa de um sistema operacional moderno (inspirado no Windows 11), rodando 100% no navegador. Não é apenas uma casca visual:
+**ObsidianOS** não é apenas uma casca estética: ele simula internamente subsistemas reais de engenharia de sistemas operacionais:
 
-- **BIOS + Boot Manager reais** — o kernel executa `bootmgr.exe` como um binário JavaScript real dentro de um sandbox
-- **Kernel singleton** com sistema de eventos, logging, gerenciamento de recursos e execution engine
-- **Disco virtual OPFS** — persistência real via Origin Private File System do navegador, com fallback para `localStorage`
-- **Sistema de arquivos virtual** com permissões, atributos, metadados e suporte a executáveis JS
-- **Registro do sistema** completo com hives reais: `HKEY_LOCAL_MACHINE`, `HKEY_CURRENT_USER`, `HKEY_CLASSES_ROOT`
-- **OSL (ObsidianOS Scripting Language)** — linguagem de script própria com lexer, parser e interpreter completos
-- **13 aplicativos completos** incluindo Terminal (20+ comandos), IDE com syntax highlighting, Gravador de tela, App Store e mais
+- **BIOS & Boot Manager Reais**: O kernel inicializa tabelas de partição (MBR/GPT), resolve caminhos ARC e executa o carregador `bootmgr.obx` no sandbox JS.
+- **Kernel Modularizado**: Dividido em barramento de eventos pub/sub, logger de 6 níveis, monitor de recursos em tempo real, detector de falhas e gerenciador PM.
+- **Escalonador Preemptivo de Processos**: Suporte a prioridades (`REALTIME` a `IDLE`), quantums de CPU, estados de processo (`READY`, `RUNNING`, `BLOCKED`, `ZOMBIE`) e despacho de sinais (`SIGTERM`, `SIGKILL`, `SIGSEGV`, etc.).
+- **Subsistema PMEM (Persistent Memory)**: Espaços de endereçamento virtualizados por processo com blocos esparsos, proteção de acesso (`R/W/X`), labels, fotos de memória em `.pmem` e mailbox de stdin no Bloco 0.
+- **Motor Gráfico Win32/GDI (`HwndRenderer`)**: Binários puros podem desenhar primitivas 2D (GDI Canvas) ou injetar interfaces DOM dinâmicas sem precisar de componentes React fixos.
+- **VFS Modular com Drivers OPFS / LocalStorage**: Sistema de arquivos hierárquico com permissões, atributos e carregamento sob demanda.
+- **14 Aplicativos Nativos**: Incluindo DOOM clássico (WebAssembly / js-dos), IDE Obsidian Code com syntax highlighting, Gravador de Tela/Câmera, App Store com runtime sandbox e Shell interativo OSL.
 
 ---
 
@@ -48,6 +50,7 @@
 | Ícones | React Icons | 5.6+ |
 | IDs únicos | uuid | 13.0+ |
 | Datas | date-fns | 4.1+ |
+| Emulação / Jogos | js-dos / DOOM WASM | Shareware 1.9 |
 | Linting | ESLint + typescript-eslint | 9+ / 8+ |
 
 ---
@@ -57,540 +60,457 @@
 ```
 ObsidianOS/
 ├── public/
+│   ├── doom.html                 # Player standalone js-dos DOOM
 │   ├── favicon.svg
 │   ├── icons.svg
 │   └── Wallpapers/
-└── src/
-    ├── main.tsx                  # Ponto de entrada React
-    ├── App.tsx                   # Orquestrador do OS (BSOD, atalhos, monitoramento)
-    ├── index.css                 # CSS global + variáveis + temas
-    ├── types/index.ts            # Todas as interfaces TypeScript
-    ├── core/
-    │   ├── kernel.ts             # Kernel singleton — coração do sistema
-    │   ├── appRegistry.ts        # Registro dinâmico de aplicativos
-    │   ├── defaultFileSystem.ts  # Filesystem padrão + binários executáveis
-    │   ├── defaultRegistry.ts    # Registro padrão do sistema
-    │   ├── opfsDriver.ts         # Driver OPFS com fallback localStorage
-    │   ├── osl/                  # ObsidianOS Scripting Language
-    │   │   ├── lexer.ts          # Tokenizador OSL
-    │   │   ├── parser.ts         # Parser (AST)
-    │   │   ├── interpreter.ts    # Interpreter com syscalls
-    │   │   ├── environment.ts    # Escopos de variáveis
-    │   │   └── types.ts          # Tipos do AST
-    │   └── fs/                   # Módulos do filesystem
-    │       ├── binaries.ts       # Binários executáveis (.exe)
-    │       ├── system.ts         # Arquivos de sistema (dlls, drivers)
-    │       ├── apps.ts           # Manifests de aplicativos
-    │       ├── dirs.ts           # Estrutura de diretórios padrão
-    │       ├── drivers.ts        # Drivers do sistema
-    │       ├── sdk.ts            # SDK e documentação
-    │       ├── osl.ts            # Scripts OSL padrão
-    │       ├── user.ts           # Arquivos do usuário
-    │       └── helpers.ts        # Utilitários do FS
-    ├── stores/
-    │   ├── fileSystem.ts         # Mirror reativo do FS do kernel
-    │   ├── registry.ts           # Mirror reativo do registry do kernel
-    │   ├── processManager.ts     # Mirror reativo dos processos do kernel
-    │   ├── windowManager.ts      # Mirror reativo das janelas do kernel
-    │   ├── systemStore.ts        # Estado de UI (bootPhase, tema, notificações)
-    │   └── contextMenuStore.ts   # Estado do menu de contexto global
-    ├── contexts/
-    │   └── ProcessContext.tsx    # Contexto de processo por janela
-    ├── components/
-    │   ├── Boot/                 # BootScreen + BSOD + RecoveryMode
-    │   ├── LockScreen/           # Tela de bloqueio / login
-    │   ├── Desktop/              # Desktop com ícones e wallpaper
-    │   ├── Taskbar/              # Barra de tarefas (posicionável)
-    │   ├── StartMenu/            # Menu Iniciar com busca
-    │   ├── Window/               # Janela arrastável + WindowRenderer
-    │   ├── ContextMenu/          # Menu de contexto global
-    │   ├── Notifications/        # Sistema de notificações
-    │   └── Setup/                # OOBE — configuração inicial
-    └── apps/
-        ├── Terminal/
-        ├── FileExplorer/
-        ├── TaskManager/
-        ├── Notepad/
-        ├── Calculator/
-        ├── Browser/
-        ├── Settings/
-        ├── Regedit/
-        ├── ObsidianCode/         # IDE com syntax highlighting
-        ├── ObsidianStore/        # App Store integrada
-        ├── ObsRecord/            # Gravador de tela/câmera
-        ├── MediaPlayer/          # Player de vídeo
-        └── SdkAppRunner/         # Executor de apps SDK instalados
+├── src/
+│   ├── main.tsx                  # Ponto de entrada React
+│   ├── App.tsx                   # Orquestrador do OS (BSOD, atalhos, eventos globais)
+│   ├── index.css                 # CSS global + variáveis de tema (dark/light/mica)
+│   ├── types/index.ts            # Interfaces centrais (Processos, FS, Registro, Sinais, etc.)
+│   ├── core/
+│   │   ├── kernel.ts             # Kernel Singleton principal
+│   │   ├── appRegistry.ts        # Registro e descoberta dinâmica de apps
+│   │   ├── opfsDriver.ts         # Driver de persistência OPFS com fallback localStorage
+│   │   ├── kernel/               # Submódulos desacoplados do Kernel
+│   │   │   ├── types.ts          # Tipos e estruturas de dados do kernel
+│   │   │   ├── event-bus.ts      # Barramento Pub/Sub de eventos do SO
+│   │   │   ├── logger.ts         # Logger do sistema (DEBUG a FATAL)
+│   │   │   ├── resources.ts      # Rastreamento de RAM, CPU e Disco
+│   │   │   ├── faults.ts         # Cadeias de dependência e falhas em cascata
+│   │   │   ├── pmem.ts           # PmMemoryManager (gerenciador de spaces PM)
+│   │   │   └── system-state.ts   # Estado de boot, drivers e serviços
+│   │   ├── pm/                   # Subsistema de Memória Persistente (SPEC v0.1)
+│   │   │   ├── address-space.ts  # Endereçamento por blocos, permissões e paginação esparsa
+│   │   │   ├── codec.ts          # Codificadores de tipos e Base64
+│   │   │   ├── system-image.ts   # Imagem canônica compilada do SO (Base64)
+│   │   │   ├── system.pm         # Código-fonte montador de memória
+│   │   │   └── system.pmem       # Snapshot binário de memória persistente
+│   │   ├── fs/                   # Filesystem Virtual Modular
+│   │   │   ├── apps.ts           # Definições de executáveis de apps (.obx)
+│   │   │   ├── binaries.ts       # Binários executáveis JS (bootmgr, ping, sysinfo, etc.)
+│   │   │   ├── dirs.ts           # Estrutura de diretórios padrão (System32, Program Files...)
+│   │   │   ├── drivers.ts        # Drivers de dispositivo carregados na inicialização
+│   │   │   ├── helpers.ts        # Utilitários de manipulação do VFS
+│   │   │   ├── osl.ts            # Scripts de automação OSL de fábrica
+│   │   │   ├── sdk.ts            # Arquivos do SDK de desenvolvimento
+│   │   │   ├── system.ts         # DLLs, bibliotecas e arquivos de configuração
+│   │   │   └── user.ts           # Perfil padrão de usuário (Desktop, Documents, Wallpapers)
+│   │   └── osl/                  # Engine OSL (ObsidianOS Scripting Language)
+│   │       ├── lexer.ts          # Tokenizador léxico
+│   │       ├── parser.ts         # Analisador sintático (gerador de AST)
+│   │       ├── interpreter.ts    # Interpretador com suporte a syscalls e PM
+│   │       ├── environment.ts    # Gerenciador de escopos e tabelas de símbolos
+│   │       └── types.ts          # Tipos do AST
+│   ├── stores/                   # Zustand Stores (Espelhos Reativos do Kernel)
+│   │   ├── fileSystem.ts         # Mirror reativo do VFS
+│   │   ├── registry.ts           # Mirror reativo do Registry
+│   │   ├── processManager.ts     # Mirror reativo do gerenciador de processos
+│   │   ├── windowManager.ts      # Mirror reativo do gerenciador de janelas
+│   │   ├── systemStore.ts        # UI State (Fase de boot, tema, volume, rede)
+│   │   └── contextMenuStore.ts   # Menu de contexto global
+│   ├── components/
+│   │   ├── Boot/                 # BootScreen, BSOD (Canvas GDI) e RecoveryMode
+│   │   ├── LockScreen/           # Tela de bloqueio e autenticação de usuários
+│   │   ├── Desktop/              # Desktop com ícones, grid e wallpaper
+│   │   ├── Taskbar/              # Barra de tarefas (posições dinâmicas via registro)
+│   │   ├── StartMenu/            # Menu Iniciar com pesquisa instantânea
+│   │   ├── Window/               # Janelas arrastáveis, redimensionáveis e HwndRenderer
+│   │   ├── ContextMenu/          # Menu de contexto flutuante global
+│   │   ├── Notifications/        # Centro de notificações e toasts
+│   │   └── Setup/                # Assistente OOBE de primeiro uso
+│   └── apps/                     # Aplicativos Integrados
+│       ├── Terminal/             # Terminal de comandos e console do SO
+│       ├── FileExplorer/         # Gerenciador de arquivos e pastas
+│       ├── TaskManager/          # Monitor de processos, CPU e memória
+│       ├── Notepad/              # Editor de texto com suporte ao VFS
+│       ├── Calculator/           # Calculadora com modos padrão e científico
+│       ├── Browser/              # Navegador Web com abas e favoritos
+│       ├── Settings/             # Painel de configurações do sistema
+│       ├── Regedit/              # Editor gráfico do Registro
+│       ├── ObsidianCode/         # IDE completa para OSL e OBX
+│       ├── ObsidianStore/        # Loja de aplicativos com catálogo
+│       ├── ObsRecord/            # Gravador de tela e webcam
+│       ├── MediaPlayer/          # Player de vídeo e mídia
+│       ├── Doom/                 # DOOM clássico integrado
+│       └── SdkAppRunner/         # Sandbox de execução de apps da loja
 ```
 
 ---
 
 ## 🚀 Como Rodar
 
+### Pré-requisitos
+- Node.js (v18+)
+- npm ou pnpm
+
+### Passos
+
 ```bash
-# Instale as dependências
+# 1. Instalar as dependências
 npm install
 
-# Inicie o servidor de desenvolvimento
+# 2. Iniciar o servidor de desenvolvimento
 npm run dev
 ```
 
-Acesse `http://localhost:5173`. O sistema inicia o boot automaticamente.
+Acesse no navegador: `http://localhost:5173`. O processo de inicialização da BIOS e do bootmgr iniciará automaticamente.
 
 ```bash
-# Build de produção
+# Para gerar o pacote de produção:
 npm run build
-```
 
-SPA pura sem backend — pode ser hospedada em qualquer CDN estático (Vercel, Netlify, GitHub Pages).
+# Para testar o pacote gerado localmente:
+npm run preview
+```
 
 ---
 
-## 🏗️ Arquitetura do Sistema
+## 🧠 Arquitetura do Kernel
+
+O Kernel (`src/core/kernel.ts`) opera como um **Singleton** de autoridade máxima sobre todo o ciclo de vida do sistema operacional:
 
 ```
-┌─────────────────────────────────────────┐
-│           CAMADA DE APLICATIVOS         │
-│  Terminal | Explorer | TaskManager | …  │
-├─────────────────────────────────────────┤
-│           CAMADA DE COMPONENTES         │
-│  Desktop | Taskbar | StartMenu | Window │
-├─────────────────────────────────────────┤
-│         CAMADA DE STORES (Mirrors)      │
-│  fileSystem | registry | processManager │
-│  windowManager | systemStore            │
-├─────────────────────────────────────────┤
-│         CAMADA DO KERNEL (Singleton)    │
-│  kernel.ts — fonte da verdade de tudo   │
-└─────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│                   APLICAÇÕES & UI                      │
+│        (Terminal, Explorer, DOOM, WindowManager)        │
+├────────────────────────────────────────────────────────┤
+│                 REACT / ZUSTAND STORES                 │
+│      (fileSystem, processManager, windowManager)       │
+│           ▲ (eventos de sincronização pub/sub)         │
+├───────────┴────────────────────────────────────────────┤
+│                    OBSIDIAN KERNEL                     │
+│  ┌──────────────────────────────────────────────────┐  │
+│  │ CPU Scheduler (Preemptivo, Quantums, Sinais)      │  │
+│  ├──────────────────────────────────────────────────┤  │
+│  │ Persistent Memory Manager (Address Spaces, PMEM) │  │
+│  ├──────────────────────────────────────────────────┤  │
+│  │ Fault Detector (Dependências de Serviços, BSOD)   │  │
+│  ├──────────────────────────────────────────────────┤  │
+│  │ Execution Engine (Sandbox JS para arquivos .obx) │  │
+│  ├──────────────────────────────────────────────────┤  │
+│  │ Virtual File System (Hierarquia, Permissões, OPFS)│  │
+│  ├──────────────────────────────────────────────────┤  │
+│  │ Registry Manager (Hives do Windows, Tipos REG_*) │  │
+│  └──────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────┘
 ```
 
-Todos os Zustand stores operam como **mirrors reativos** do kernel. A fonte da verdade do estado e da lógica vive inteiramente no `Kernel` singleton. Os stores refletem o estado via eventos (`kernel.on('system:snapshot', ...)`, `kernel.on('fs:snapshot', ...)`).
-
----
-
-### Kernel (`src/core/kernel.ts`)
-
-Singleton clássico — uma única instância em toda a aplicação.
-
-#### Responsabilidades
-
-| Sistema | Função |
-|---------|--------|
-| **BIOS / Boot** | Executa `powerOn()`, roda `bootmgr.exe` como binário real |
-| **Execution Engine** | Executa arquivos `.exe` e `.osl` do filesystem como scripts em sandbox |
-| **Logging** | 6 níveis: `DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL`, `FATAL` |
-| **Recursos** | CPU, RAM e disco em tempo real |
-| **Drivers** | Registra e consulta drivers carregados |
-| **Serviços** | Registra e atualiza status de serviços |
-| **BSOD** | Dispara tela azul com stop code e informações técnicas |
-| **Eventos** | Sistema pub/sub interno (`on`, `once`, `emit`, `off`) |
-| **Filesystem** | CRUD completo do filesystem virtual |
-| **Registry** | CRUD completo do registro do sistema |
-| **Processos** | Criação, encerramento, suspensão de processos |
-| **Janelas** | Abertura, fechamento, foco, resize, maximizar de janelas |
-| **App Discovery** | Varre `System32` por manifestos JSON e registra apps |
-
-#### Fases do Boot (`BootPhase`)
-
-```
-OFF → BIOS_POST → BIOS_HARDWARE → BOOTLOADER → KERNEL_INIT → DRIVER_LOAD
-    → SERVICE_INIT → SHELL_INIT → DESKTOP_READY
-    → BOOT_FAILURE | BSOD
-```
-
-#### API pública principal
+### Principais APIs do Kernel
 
 ```typescript
-kernel.powerOn()                   // Inicia o boot (BIOS → bootmgr.exe)
-kernel.finalizeBoot()              // Chamado pelo bootmgr.exe ao terminar
-kernel.loadShell()                 // Carrega explorer.exe + descobre apps
-kernel.on(event, callback)         // Subscrição de eventos
-kernel.emit(event, ...args)        // Emissão de eventos
-kernel.log(level, source, message) // Logging (FATAL → BSOD automático)
-kernel.triggerBSOD(info)           // Dispara BSOD
-kernel.allocateMemory(mb, name)    // Aloca RAM
-kernel.freeMemory(mb)              // Libera RAM
-kernel.createProcess(...)          // Cria processo
-kernel.terminateProcess(pid)       // Encerra processo
-kernel.openWindow(config)          // Abre janela
-kernel.closeWindow(id)             // Fecha janela
-kernel.fsGetNode(path)             // Lê nó do filesystem
-kernel.fsCreateFile(...)           // Cria arquivo
-kernel.fsDeleteNode(path)          // Deleta arquivo/pasta
-kernel.regGetValue(path)           // Lê valor do registro
-kernel.regSetValue(path, ...)      // Escreve valor no registro
-kernel.scanSystemApps(fs, reg)     // Descobre e registra apps
-kernel.reset()                     // Reseta estado (reboot)
+// Ciclo de Vida e Boot
+kernel.powerOn()                      // Dispara POST da BIOS e bootmgr.obx
+kernel.finalizeBoot()                 // Conclui sequência de boot
+kernel.loadShell()                    // Carrega explorer.obx e descobre apps
+
+// Processos e Escalonamento
+kernel.createProcess(spec)            // Cria PCB, aloca PM space e adiciona à fila READY
+kernel.terminateProcess(pid, code)    // Encerra processo, desaloca PM e limpa janelas
+kernel.sendSignal(pid, signal)        // Dispara sinal (SIGTERM, SIGKILL, SIGSEGV...)
+kernel.scheduleNext()                 // Avança quantum do escalonador
+
+// Memória Persistente (PM)
+kernel.pmem.getSpace(pid)             // Retorna o PmAddressSpace associado ao processo
+kernel.pmem.snapshotSpace(pid)        // Exporta snapshot binário Base64 do espaço
+kernel.pmem.resumeSpace(pid, b64)     // Restaura o espaço a partir de dados salvos
+
+// Manipulação do VFS e Registro
+kernel.fsGetNode(path)                // Busca nó do sistema de arquivos
+kernel.fsCreateFile(parent, name, c)  // Cria arquivo no disco
+kernel.regGetValue(path)              // Obtém valor de chave do Registro
+kernel.regSetValue(path, val, type)   // Escreve chave no Registro
 ```
 
 ---
 
-### Execution Engine
+## 💾 Subsistema de Memória Persistente (PM / PMEM)
 
-O kernel possui um **execution engine** que executa arquivos `.exe` do filesystem como scripts JavaScript reais dentro de um sandbox (`new Function`).
+O ObsidianOS conta com uma implementação completa de **Persistent Memory** (`src/core/pm/`), projetada segundo a especificação SPEC v0.1:
 
-Cada binário recebe o objeto `OS` com a API do sistema:
+- **Espaço de Endereçamento Dedicado por Processo (`PmAddressSpace`)**:
+  - Memória segmentada em blocos de tamanho fixo (padrão: 64 KB).
+  - Alocação **esparsa**: blocos só consomem memória real na primeira escrita (`on-demand`).
+  - **Permissões Granulares por Bloco**: `R` (Read = 1), `W` (Write = 2), `X` (Execute = 4).
+  - Violações de limites ou escrita em blocos somente-leitura disparam exceções tipadas `PmFault` (`PERM_FAULT`, `BOUNDS_FAULT`, `OOM_FAULT`).
+- **Mailbox de Stdin no Bloco 0**:
+  - O Bloco 0 do espaço do processo é reservado como mailbox seguro do Kernel.
+  - A comunicação assíncrona de I/O é gerenciada sem poluir filas de eventos globais do JavaScript.
+- **Labels e Mapeamento de Símbolos**:
+  - Processos podem nomear endereços e blocos com labels simbólicos (`mem_label`).
+- **Hibernação e Snapshots (`.pmem`)**:
+  - O estado completo do address space pode ser serializado para Base64/binário e gravado no disco virtual.
+  - Na retomada (`system::mem_resume`), todo o estado de variáveis e blocos é reconstituído fielmente.
 
-```javascript
-OS.addBootLog(msg)       // Escreve no log de boot
-OS.setBootPhase(phase)   // Muda fase do boot
-OS.finalizeBoot()        // Sinaliza fim do boot
-OS.triggerBSOD(info)     // Dispara BSOD
-OS.readFile(path)        // Lê arquivo do FS
-OS.writeFile(path, c)    // Escreve arquivo no FS
-OS.listFiles(path)       // Lista arquivos
-OS.createProcess(...)    // Cria processo
-OS.allocateMemory(mb, n) // Aloca RAM
-OS.registerDriver(entry) // Registra driver
-OS.registerService(entry)// Registra serviço
-OS.terminate(exitCode)   // Encerra o processo
-OS.wait(ms)              // Aguarda (async)
+---
+
+## ⚙️ CPU Scheduler, Processos e Sinais
+
+O kernel implementa um escalonador de processos com múltiplos estados:
+
+### Estados de Processo (`ProcessState`)
+- `NEW`: Criado, aguardando alocação de recursos.
+- `READY`: Na fila de execução, aguardando quantum de CPU.
+- `RUNNING`: Em execução no momento.
+- `BLOCKED`: Bloqueado aguardando I/O ou evento assíncrono.
+- `SLEEPING`: Aguardando expiração de timer (`OS.wait`).
+- `ZOMBIE`: Processo finalizado aguardando reap pelo processo pai.
+- `TERMINATED`: Totalmente limpo do sistema.
+
+### Prioridades de CPU (`ProcessPriority`)
+1. `REALTIME` (Nível 0 - Reservado para componentes críticos do kernel)
+2. `HIGH` (Nível 1)
+3. `ABOVE_NORMAL` (Nível 2)
+4. `NORMAL` (Nível 3 - Padrão para processos de usuário)
+5. `BELOW_NORMAL` (Nível 4)
+6. `IDLE` (Nível 5 - Executado apenas quando o sistema está ocioso)
+
+### Sinais Suportados
+O kernel despacha sinais clássicos de controle:
+`SIGTERM` · `SIGKILL` · `SIGINT` · `SIGSEGV` · `SIGFPE` · `SIGILL` · `SIGABRT` · `SIGALRM` · `SIGCHLD` · `SIGUSR1` · `SIGUSR2`
+
+---
+
+## 🔌 Fluxo de Boot e Inicialização
+
+```
+1. BootScreen monta
+   └─► kernel.powerOn()
+       ├─ Carrega tabela de partições e BootConfig (MBR / GPT)
+       ├─ Valida integridade do disco e arquivos críticos (fsRepairSystemFiles)
+       └─ Dispara 'bootmgr.obx' dentro da Sandbox
+
+2. bootmgr.obx (Execução JavaScript Real)
+   ├─ Lê C:\ObsidianOS\System32\boot.ini e valida o ARC path (partition(1))
+   ├─ Carrega e aloca memória para bibliotecas fundamentais:
+   │  ├── kernel32.dll
+   │  ├── gdi32.dll
+   │  ├── user32.dll
+   │  └── hal.dll
+   ├─ Inicializa drivers essenciais:
+   │  └── ntfs.sys, disk.sys, display.sys, hid.sys, netio.sys
+   └─ Invoca OS.finalizeBoot()
+
+3. kernel.loadShell()
+   ├─ Descobre manifestos em C:\Program Files\ObsidianOS Apps\
+   ├─ Inicia serviços em background:
+   │  ├── smss.obx (Session Manager)
+   │  ├── csrss.obx (Client Server Runtime)
+   │  ├── wininit.obx & services.obx (Service Control Manager)
+   │  ├── lsass.obx (Autenticação e segurança)
+   │  ├── svchost.obx (Host de serviços)
+   │  ├── dwm.obx (Desktop Window Manager)
+   │  └── explorer.obx (Shell e interface gráfica)
+   └─ Define BootPhase como 'DESKTOP_READY'
 ```
 
-O SDK em `C:\ObsidianOS\SDK\lib\obsidian.js` é automaticamente injetado antes de cada execução.
+---
+
+## 📂 Sistema de Arquivos e Registro
+
+### VFS (Virtual File System)
+- **Persistência Dupla**: Origin Private File System (OPFS) para alta performance com fallback transparente para `localStorage`.
+- **Nós de Arquivo Completos**:
+  - Metadados de criação, modificação e último acesso.
+  - Atributos reais (`readonly`, `hidden`, `system`, `archive`).
+  - Permissões no formato Unix/Windows (`rwx`).
+- **Suporte a Executáveis Modernos**:
+  - Arquivos `.obx`: Binários executáveis JS do ecossistema ObsidianOS.
+  - Arquivos `.osl`: Scripts interpretados pelo engine OSL.
+  - Arquivos `.pmem`: Snapshots de memória persistente.
+
+### Registro do Sistema (Registry)
+Totalmente aderente à hierarquia Windows:
+- **Hives**: `HKEY_LOCAL_MACHINE`, `HKEY_CURRENT_USER`, `HKEY_CLASSES_ROOT`, `HKEY_USERS`, `HKEY_CURRENT_CONFIG`.
+- **Tipos de Dados**: `REG_SZ`, `REG_DWORD`, `REG_BINARY`, `REG_MULTI_SZ`, `REG_EXPAND_SZ`, `REG_QWORD`.
 
 ---
 
-### Fluxo de Boot
+## 🎨 Motor Gráfico e HwndRenderer
 
-O boot é inteiramente orquestrado pelo kernel — não existe mais um `bootSequence.ts` separado.
+Para permitir que binários puramente em JavaScript (sem componentes React) criem interfaces gráficas completas, o sistema inclui o **`HwndRenderer`**:
 
-```
-1. BootScreen monta → kernel.powerOn()
-2. kernel.powerOn():
-   - fsRepairSystemFiles()        → garante que bootmgr.exe está atualizado
-   - createProcess('bootmgr.exe') → cria processo
-   - executeBinary(bootmgr.exe)   → executa o script do bootmgr
-3. bootmgr.exe (script JS):
-   - Lê boot.ini, valida ARC path
-   - Carrega ntoskrnl.exe (verifica existência)
-   - Registra drivers (ntfs.sys, disk.sys, display.sys, hid.sys, netio.sys)
-   - OS.finalizeBoot()            → emite 'boot:finished'
-4. BootScreen recebe 'boot:finished':
-   - Exibe logo + spinner por 2s
-   - kernel.loadShell()
-5. kernel.loadShell():
-   - scanSystemApps()             → descobre e registra apps do System32
-   - createProcess('explorer.exe', 'dwm.exe', 'SearchHost.exe')
-   - bootPhase = 'DESKTOP_READY'
-6. BootScreen → setBootPhase('login') → LockScreen aparece
-7. Usuário faz login → kernel.sysLogin() → bootPhase = 'desktop'
-```
-
-**Auto-Repair:** Se `bootmgr.exe` não for encontrado, o kernel chama `fsDeepReformat()` e tenta novamente antes de falhar.
-
----
-
-### Sistema de Arquivos Virtual
-
-Estado gerido internamente pelo kernel, persistido no `localStorage` sob `obsidianos-filesystem-v2`. O Zustand store (`fileSystem.ts`) é apenas um mirror reativo.
-
-#### Tipos de nó
-
-```typescript
-{
-  id: string;           // Igual ao path
-  name: string;
-  type: 'file' | 'directory' | 'shortcut';
-  path: string;         // Separador \\
-  parentPath: string;
-  size: number;
-  extension?: string;
-  content?: string;
-  createdAt: number;
-  modifiedAt: number;
-  accessedAt: number;
-  permissions: FilePermissions;
-  attributes: FileAttributes;
-  metadata?: Record<string, string>;
-}
-```
-
-#### Tipos de executáveis
-
-| Tipo | `content` | Uso |
-|------|-----------|-----|
-| `makeSysExe` | String descritiva PE32+ | Arquivos de sistema (ntoskrnl, dlls) |
-| `makeAppExe` | JSON manifest com `appId`, `name`, `icon` | Apps descobertos pelo kernel |
-| `makeBinaryExe` | Código JavaScript | Executáveis reais (bootmgr.exe, ping.exe, etc.) |
-
----
-
-### Registro do Sistema
-
-Gerido pelo kernel, persistido em `obsidianos-registry-v2`. Suporta todos os tipos reais do Windows:
-
-`REG_SZ` · `REG_DWORD` · `REG_BINARY` · `REG_MULTI_SZ` · `REG_EXPAND_SZ` · `REG_QWORD`
-
-Hives: `HKEY_LOCAL_MACHINE` · `HKEY_CURRENT_USER` · `HKEY_CLASSES_ROOT` · `HKEY_USERS` · `HKEY_CURRENT_CONFIG`
-
----
-
-### App Registry (`src/core/appRegistry.ts`)
-
-Começa vazio. Populado por `kernel.scanSystemApps()` durante o `loadShell()`, que varre `C:\ObsidianOS\System32` e `C:\Program Files\ObsidianOS Apps` procurando `.exe` com manifesto JSON (`type: "executable"`).
-
-Os componentes React são lazy-loaded estaticamente:
-
-| appId | Componente |
-|-------|-----------|
-| `terminal` | `apps/Terminal/Terminal` |
-| `notepad` | `apps/Notepad/Notepad` |
-| `calculator` | `apps/Calculator/Calculator` |
-| `file-explorer` | `apps/FileExplorer/FileExplorer` |
-| `settings` | `apps/Settings/Settings` |
-| `task-manager` | `apps/TaskManager/TaskManager` |
-| `browser` | `apps/Browser/Browser` |
-| `regedit` | `apps/Regedit/Regedit` |
-| `obsidian-code` | `apps/ObsidianCode/ObsidianCode` |
-| `obsidian-store` | `apps/ObsidianStore/ObsidianStore` |
-| `obs-record` | `apps/ObsRecord/ObsRecord` |
-| `media-player` | `apps/MediaPlayer/MediaPlayer` |
-| `sdk-runner` | `apps/SdkAppRunner/SdkAppRunner` |
-
----
-
-## 🖼️ Componentes da Interface
-
-### Boot Screen
-Modo texto (BIOS/drivers): fundo preto, fonte monospace, log ao vivo via `kernel.on('bootLog')`.
-Modo gráfico (shell init): logo 4 quadrados + spinner de 5 pontos.
-
-### BSOD
-Fiel ao Windows 11. Barra de progresso do memory dump baseada na RAM real do kernel. Cria `.DMP` em `C:\ObsidianOS\System32\Minidump\`. Reinicia após 3s via `window.location.reload()`.
-
-### Lock Screen
-Duas fases: relógio/data → campo de senha. Senha em branco = acesso direto.
-
-### Desktop
-Ícones fixos com double-click para abrir. Menu de contexto com opções de exibição e novo arquivo. Só renderiza se `explorer.exe` estiver rodando.
-
-### Taskbar
-`[Iniciar] [Pesquisa]` · `[janelas abertas]` · `[WiFi] [Volume] [Bateria] [Relógio]`
-
-Posição configurável via Registro: `HKEY_CURRENT_USER\Software\ObsidianOS\Taskbar\Position` → `bottom | top | left | right`
-
-### Start Menu
-Busca em tempo real nos apps registrados. Seção "Fixados" (primeiros 6 apps). Context menu por app.
-
-### Window
-Title bar com drag, double-click para maximizar, right-click para context menu. 8 resize handles. Conteúdo envolto em `ProcessProvider` + `Suspense`.
-
-### Context Menu
-Global, singleton, gerenciado pelo `contextMenuStore`. Suporta separadores, items desabilitados e sub-menus.
+- **GDI Canvas (`gdi:draw`)**: O executável emite comandos de desenho vetorizado (`fillStyle`, `fillRect`, `fillText`, `clearRect`) diretamente para o canvas 2D da janela associada ao seu PID.
+- **Injeção de DOM Dinâmico (`user32:dom_update`)**: Permite que scripts gerem marcação HTML e recebam eventos de clique através do barramento IPC do kernel.
 
 ---
 
 ## 📦 Aplicativos Integrados
 
-| App | appId | Descrição |
-|-----|-------|-----------|
-| Terminal | `terminal` | 20+ comandos, histórico (↑↓), autocompletar (Tab) |
-| Explorador de Arquivos | `file-explorer` | Navegação, criação, renomeação, exclusão |
-| Gerenciador de Tarefas | `task-manager` | Gráficos CPU/RAM em tempo real, lista de processos |
-| Bloco de Notas | `notepad` | Editor de texto com save no filesystem virtual |
-| Calculadora | `calculator` | Operações básicas e avançadas |
-| Navegador | `browser` | Iframe com barra de endereço |
-| Configurações | `settings` | Tema, wallpaper, volume, rede, posição da taskbar |
-| Editor do Registro | `regedit` | Navegação e edição do registro do sistema |
-| **Obsidian Code** | `obsidian-code` | IDE completa para SDK (.obx) e OSL (.osl) com syntax highlighting, file tree, console integrado e execução em tempo real |
-| **Obsidian Store** | `obsidian-store` | App Store com busca, categorias e instalação de apps via filesystem virtual |
-| **ObS Record** | `obs-record` | Gravador de tela/câmera com preview ao vivo, pausa, qualidade ajustável, download e save no VFS |
-| **Media Player** | `media-player` | Player de vídeo com suporte a blob URLs e base64, integrado ao File Explorer |
-| **SDK App Runner** | `sdk-runner` | Executor sandbox para apps instalados via Obsidian Store |
-
-### Comandos do Terminal
-
-`help` · `dir`/`ls` · `cd` · `cls`/`clear` · `echo` · `type`/`cat` · `mkdir`/`md` · `touch` · `del`/`rm` · `rename` · `move` · `copy` · `tasklist` · `taskkill` · `ping` · `ipconfig` · `systeminfo` · `reg` · `regedit` · `calc` · `notepad` · `explorer` · `start` · `shutdown`/`reboot`
+| Aplicativo | ID (`appId`) | Categoria | Descrição |
+|------------|--------------|-----------|-----------|
+| **DOOM** | `doom` | Games | O clássico jogo de tiro em primeira pessoa rodando via WebAssembly e js-dos |
+| **Obsidian Code** | `obsidian-code` | Produtividade | IDE avançada com coloração de sintaxe para OSL e OBX, árvore de arquivos e console interativo |
+| **Terminal** | `terminal` | Sistema | Console interativo com suporte a comandos nativos e shell `cmd.osl` |
+| **Explorador de Arquivos** | `file-explorer` | Sistema | Navegação por pastas, criação, renomeação, visualização e exclusão de arquivos |
+| **Gerenciador de Tarefas** | `task-manager` | Sistema | Visualização de CPU/RAM em tempo real e gerenciamento de processos ativos |
+| **Bloco de Notas** | `notepad` | Produtividade | Editor de texto integrado para arquivos `.txt`, `.log`, `.osl` |
+| **Calculadora** | `calculator` | Utilitários | Modos padrão e cálculo com histórico |
+| **Navegador Web** | `browser` | Produtividade | Navegador com barra de navegação e histórico |
+| **Configurações** | `settings` | Sistema | Personalização de wallpaper, tema, volume, rede e alinhamento da barra de tarefas |
+| **Editor do Registro** | `regedit` | Sistema | Visualizador e editor em árvore para as hives do sistema |
+| **ObS Record** | `obs-record` | Multimídia | Gravador de tela e webcam com download e salvamento direto no VFS |
+| **Media Player** | `media-player` | Multimídia | Reprodutor de áudio e vídeo com suporte a Blob URLs e Base64 |
+| **Obsidian Store** | `obsidian-store` | Sistema | Loja de aplicativos para descoberta e instalação de novos pacotes |
+| **SDK App Runner** | `sdk-app-runner` | Sistema | Ambiente isolado de execução para aplicativos baixados pela loja |
 
 ---
 
 ## 🔷 OSL — ObsidianOS Scripting Language
 
-O OSL é uma linguagem de script interpretada, criada especificamente para o ObsidianOS. Os arquivos têm extensão `.osl` e são executados diretamente pelo kernel via interpreter próprio.
+O OSL é a linguagem de script oficial interpretada do ObsidianOS. Os arquivos possuem extensão `.osl` e rodam dentro da thread do SO com total segurança.
 
-### Pipeline de execução
-
-```
-Código fonte (.osl)
-    ↓ Lexer         → stream de tokens
-    ↓ Parser        → AST (Abstract Syntax Tree)
-    ↓ Interpreter   → execução + syscalls
-```
-
-### Sintaxe
-
+### Exemplo de Código OSL
 ```osl
-// Variáveis
-let nome = "Developer";
+// Variáveis e tipos
+let versao = "1.0.0";
+let usuario = "Developer";
 
-// Funções
-fn saudacao(usuario) {
-    system::log("Bem-vindo, " + usuario + "!");
+// Declaração de funções
+fn saudacao(nome) {
+    system::log("Bem-vindo ao ObsidianOS, " + nome + "!");
 }
 
-// Estruturas de controle
-if (nome == "Developer") {
-    saudacao(nome);
-} else {
-    system::log("Acesso negado.");
-}
+saudacao(usuario);
 
-// Loop
-let i = 0;
-while (i < 5) {
-    system::log("Iteração: " + i);
-    i = i + 1;
-}
+// Manipulação de Memória Persistente (PMEM)
+let stats = system::mem_stats();
+system::log("PM Stats: " + stats);
+
+// Escrita direta em memória
+system::mem_write(1, 0, "Dado persistente na PM");
+let lido = system::mem_read(1, 0, 22);
+system::log("Lido da PM: " + lido);
+
+// Hibernação da memória
+system::mem_snap();
 ```
 
-### Syscalls disponíveis (`system::`)
+### Syscalls Disponíveis (`system::*`)
 
 | Syscall | Descrição |
 |---------|-----------|
-| `system::log(msg)` | Imprime no console do processo |
-| `system::fs_read(path)` | Lê conteúdo de um arquivo |
-| `system::fs_write(path, content)` | Escreve em um arquivo |
-| `system::fs_exists(path)` | Verifica se um nó existe |
-| `system::fs_delete(path)` | Deleta um arquivo/pasta |
-| `system::fs_list(path)` | Lista filhos de um diretório |
-| `system::fs_getcwd()` | Retorna diretório atual do processo |
-| `system::fs_chdir(path)` | Muda diretório do processo |
-| `system::reg_get(path)` | Lê valor do registro |
-| `system::mem_stats()` | Resumo do address space PM do processo |
-| `system::mem_write(block, offset, value)` | Escreve texto/número na memória PM |
-| `system::mem_read(block, offset, length)` | Lê texto da memória PM |
-| `system::mem_label(nome, block, offset)` | Define label no address space |
-| `system::mem_snap()` | Hiberna o próprio space em `.pmem` |
-| `system::mem_resume()` | Restaura o próprio space do `.pmem` |
-| `system::mem_audit()` | Razão vs. lastro da RAM |
-| `system::get_resource(type)` | Retorna `ram` ou `cpu` em uso |
-| `system::stdin()` | Lê input do usuário (async) |
-| `system::panic(code, msg)` | Dispara BSOD |
-
-### Funções built-in
-
-| Função | Descrição |
-|--------|-----------|
-| `print(...)` | Loga via kernel |
-| `wait(ms)` | Aguarda N milissegundos (async) |
-| `rand(max)` | Número aleatório de 0 a max |
+| `system::log(msg)` | Escreve na saída padrão do processo |
+| `system::stdin()` | Lê entrada do usuário (assíncrono) |
+| `system::fs_read(caminho)` | Lê conteúdo de arquivo no VFS |
+| `system::fs_write(caminho, dado)` | Escreve arquivo no VFS |
+| `system::fs_list(caminho)` | Retorna array de arquivos de um diretório |
+| `system::fs_exists(caminho)` | Checa existência de arquivo ou pasta |
+| `system::fs_delete(caminho)` | Remove arquivo ou diretório |
+| `system::fs_getcwd()` | Retorna diretório corrente de trabalho |
+| `system::fs_chdir(caminho)` | Altera diretório corrente |
+| `system::reg_get(chave)` | Lê valor do registro |
+| `system::mem_stats()` | Retorna estatísticas de blocos e memória PM do processo |
+| `system::mem_write(bloco, offset, valor)` | Escreve texto ou número no bloco PM |
+| `system::mem_read(bloco, offset, tamanho)` | Lê dados da memória PM |
+| `system::mem_label(nome, bloco, offset)` | Cria um label simbólico na memória PM |
+| `system::mem_snap()` | Exporta snapshot da memória PM para `.pmem` |
+| `system::mem_resume()` | Restaura memória do arquivo de snapshot `.pmem` |
+| `system::mem_audit()` | Compara razão de memória PM vs. RAM física do navegador |
+| `system::panic(stopCode, mensagem)` | Dispara Blue Screen of Death (BSOD) controlado |
 
 ---
 
-## 🔧 SDK de Aplicativos
+## 🔧 SDK de Aplicativos (.obx)
 
-Apps SDK são scripts JavaScript (`.obx`) que rodam via `SdkAppRunner` ou diretamente pelo kernel execution engine. Têm acesso à API `OS.*`:
+Os programas escritos para o ObsidianOS (`.obx`) rodam via motor de execução com acesso à API global `OS`:
 
 ```javascript
-// Globals SDK disponíveis
-OS.addBootLog(msg)
-OS.readFile(path)
-OS.writeFile(path, content)
-OS.listFiles(path)
-OS.createProcess(name, title, icon)
-OS.allocateMemory(mb, name)
-OS.getResources()    // { usedMemory, totalMemory, cpuUsage }
-OS.terminate(code)
-OS.wait(ms)
+// Exemplo de binário .obx
+OS.print("Inicializando aplicativo...");
 
-// StdIO
-StdIO.print(msg)
-StdIO.error(msg)
+// Alocação de memória e recursos
+OS.allocateMemory(16, "MeuApp");
+const resources = OS.getResources();
+OS.print(`RAM em uso: ${resources.usedMemory} MB`);
 
-// Proc
-Proc.pid
-Proc.exit(code)
-Proc.wait(ms)
+// Leitura e escrita no sistema de arquivos
+if (OS.fileExists("C:\\config.json")) {
+  const cfg = OS.readFile("C:\\config.json");
+  OS.print("Configuração carregada.");
+}
+
+// Comunicação interprocessos (IPC)
+OS.ipcSend(1, "evento:ping", { timestamp: Date.now() });
+
+// Finalização
+OS.terminate(0);
 ```
-
-Apps da **Obsidian Store** são instalados em `C:\Program Files\ObsidianOS Apps\` e têm acesso à API `OS.User32` para criar elementos DOM dentro da janela do SdkAppRunner.
 
 ---
 
-## 🔥 Mecânicas de Realismo
+## 🔥 Mecânicas de Realismo e Falhas em Cascata (BSOD)
 
-### BSOD por arquivos críticos deletados
-Deletar estes arquivos dispara BSOD automaticamente:
+O ObsidianOS simula o comportamento de falhas reais com alta fidelidade:
 
-| Arquivo | Stop Code |
-|---------|-----------| 
-| `gdi32.dll` | `WIN32K_CRITICAL_FAILURE` (com corrupção visual por 4s antes) |
-| `user32.dll` | `CLIENT_SERVER_RUNTIME_ISSUE` (sistema fica não-responsivo por 5s) |
+### Falhas em Cascata (Cascade Failure)
+Quando um processo ou serviço crítico encerra inesperadamente (ex: `csrss.obx`, `lsass.obx`, `dwm.obx`), o subsistema de falhas (`faults.ts`) propaga a quebra para todos os processos dependentes:
+1. `cascade:start`: Identificação da causa raiz e início da desestabilização.
+2. `cascade:step`: Notificação progressiva de processos que falharam na cadeia.
+3. Degradação Visual Dinâmica no BSOD via Canvas GDI:
+   - **Fase 1 (Flicker)**: Oscilações leves de cor na tela.
+   - **Fase 2 (Distorção)**: Entradas avermelhadas e linhas de glitch.
+   - **Fase 3 (Colapso Total)**: Tremores de tela (*screen shake*), linhas de ruído e travamento.
 
-### BSOD por processos críticos encerrados
+### Geração de Minidump
+- Um arquivo de despejo de memória real (`MEMORY_<data>.DMP`) é gerado e gravado em `C:\ObsidianOS\System32\Minidump\`.
+- Inclui Stop Code, Componente Falho, BugCheck Code e a cadeia exata da cascata (`CASCADE_CHAIN`).
 
-| Processo | Stop Code |
-|----------|-----------|
-| `System` | `CRITICAL_PROCESS_DIED` |
-| `csrss.exe` | `CRITICAL_PROCESS_DIED` |
-| `lsass.exe` | `CRITICAL_PROCESS_DIED` |
-| `dwm.exe` | `DESKTOP_WINDOW_MANAGER_DIED` |
-| `smss.exe`, `wininit.exe`, `services.exe` | `CRITICAL_PROCESS_DIED` |
-
-### Auto-Repair
-Se `bootmgr.exe` não for encontrado no boot, o kernel executa `fsDeepReformat()` e tenta restaurar antes de falhar com BSOD.
-
-### Recovery Mode
-Após 3 crashes consecutivos (contados em `obsidianos_crash_count`), o sistema entra em Recovery Mode ao invés de tentar bootar normalmente.
-
-### Monitoramento de recursos
-CPU calculada a partir da soma dos processos ativos + ruído orgânico. RAM alocada/liberada dinamicamente pelo kernel via `allocateMemory`/`freeMemory`. Overload de RAM dispara BSOD `MEMORY_MANAGEMENT`.
-
-### Atalhos de teclado
-`Ctrl+Shift+Esc` → Gerenciador de Tarefas
+### Modo de Recuperação (Recovery Mode)
+- Após 3 crashes consecutivos sem sucesso de inicialização (rastreados por contador persistente), o sistema entra automaticamente no **Obsidian Recovery Environment**, permitindo restauração de ponto anterior, reparo de inicialização ou restauração de fábrica.
 
 ---
 
-## 🔧 Como Adicionar um Novo Aplicativo
+## ➕ Como Adicionar um Novo Aplicativo
 
-**1. Crie o componente React:**
+Adicionar um novo app ao sistema é um processo modular e padronizado:
+
+### 1. Crie o Componente do App
+Crie a pasta em `src/apps/MeuApp/`:
+```tsx
+// src/apps/MeuApp/MeuApp.tsx
+import './MeuApp.css';
+
+export default function MeuApp({ windowId }: { windowId: string }) {
+  return (
+    <div className="meu-app-container">
+      <h2>Olá, ObsidianOS!</h2>
+    </div>
+  );
+}
 ```
-src/apps/MeuApp/MeuApp.tsx
-src/apps/MeuApp/MeuApp.css
-```
 
-O componente recebe `{ windowId: string }` como prop.
-
-**2. Registre o lazy import em `appRegistry.ts`:**
+### 2. Registre o Componente no `appRegistry.ts`
+Adicione o import lazy em [`src/core/appRegistry.ts`](src/core/appRegistry.ts):
 ```typescript
-const components: Record<string, any> = {
-  // ...existentes
+const components: Record<string, ReturnType<typeof lazy>> = {
+  // ...
   'meu-app': lazy(() => import('../apps/MeuApp/MeuApp')),
 };
 ```
 
-**3. Adicione o executável no `defaultFileSystem.ts`:**
+### 3. Registre o Executável em `src/core/fs/apps.ts`
+Adicione o executável à lista `appExes`:
 ```typescript
-// Na array appExes:
-[
-  'C:\\ObsidianOS\\System32\\meuapp.exe',
-  'meuapp.exe',
-  'C:\\ObsidianOS\\System32',
-  'meu-app',        // appId
-  '🚀',             // icon
-  'utilities',      // category
-  'Meu Aplicativo'  // displayName
-],
-```
-
-O kernel vai descobrir o app automaticamente no próximo boot via `scanSystemApps()`.
-
-**4. (Opcional) Adicione ao Desktop em `Desktop.tsx`:**
-```typescript
-const defaultIcons: DesktopIconData[] = [
-  // ...existentes
-  { id: 'meu-app', name: 'Meu Aplicativo', icon: '🚀', appId: 'meu-app' },
+export const appExes: [string, string, string, string, string, string, string][] = [
+  // ...
+  [
+    'C:\\Program Files\\ObsidianOS Apps\\meuapp.obx',
+    'meuapp.obx',
+    'C:\\Program Files\\ObsidianOS Apps',
+    'meu-app',        // appId
+    '🚀',             // ícone
+    'utilities',      // categoria
+    'Meu Aplicativo'  // Nome de exibição
+  ],
 ];
 ```
 
+O kernel detectará o executável automaticamente durante a inicialização do shell (`scanSystemApps`) e ele aparecerá no Menu Iniciar, na busca e no Explorador de Arquivos!
+
 ---
 
-## 📦 Scripts
+## 📜 Licença
 
-```bash
-npm run dev      # Servidor de desenvolvimento
-npm run build    # Build de produção (tsc + vite)
-npm run lint     # ESLint
-npm run preview  # Preview do build
-```
+Distribuído sob a licença MIT. Sinta-se livre para usar, estudar e expandir o projeto!
