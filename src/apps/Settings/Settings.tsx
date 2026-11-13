@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { useSystem } from '../../stores/systemStore';
 import { useRegistry } from '../../stores/registry';
+import kernel from '../../core/kernel';
 import './Settings.css';
 
 const sections = [
@@ -213,16 +214,7 @@ export default function SettingsApp({ }: { windowId: string }) {
                 <button
                   style={{ background: '#b91c1c', color: 'white', padding: '8px 16px', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
                   onClick={() => {
-                    if (window.confirm('ATENÇÃO: TEM CERTEZA ABSOLUTA? Isso irá limpar seu disco virtual (OPFS) e dados da página, reinstalando o sistema operacional ObsidianOS do zero.')) {
-                      navigator.storage.getDirectory().then(async d => {
-                        for await (const [n] of (d as any).entries()) {
-                          await d.removeEntry(n, { recursive: true });
-                        }
-                      }).catch(e => console.error(e)).finally(() => {
-                        localStorage.clear();
-                        window.location.reload();
-                      });
-                    }
+                    kernel.resetSystem(true);
                   }}
                 >
                   Formatar Sistema

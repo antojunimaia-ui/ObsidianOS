@@ -1,226 +1,403 @@
+// ============================================
+// SetupWizard (Instalador e Configuração Básica do OS)
+// Interface clássica, limpa e utilitária de instalador
+// ============================================
 import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { useUserStore } from '../../stores/userStore';
 import { useSystem } from '../../stores/systemStore';
 import kernel from '../../core/kernel';
 import './SetupWizard.css';
 
-const steps = [
-  { id: 'welcome', title: 'Bem-vindo ao ObsidianOS' },
-  { id: 'user', title: 'Quem vai usar este PC?' },
-  { id: 'theme', title: 'Personalize seu estilo' },
-  { id: 'finalizing', title: 'Quase pronto...' },
+const STEPS = [
+  { id: 'welcome', title: 'Bem-vindo à Instalação do ObsidianOS' },
+  { id: 'user', title: 'Configuração de Usuário' },
+  { id: 'theme', title: 'Aparência do Sistema' },
+  { id: 'installing', title: 'Instalando Arquivos do Sistema' },
 ];
 
 export default function SetupWizard() {
-  const [currentStep, setCurrentStep] = useState(0);
+  const [step, setStep] = useState(0);
   const { createProfile } = useUserStore();
   const { setTheme } = useSystem();
-  
-  // Form State
-  const [username, setUsername] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [password, setPassword] = useState('');
-  const [accentColor, setAccentColor] = useState('#6366f1');
 
-  const nextStep = () => {
-    if (currentStep < steps.length - 1) {
-      setCurrentStep(currentStep + 1);
-      
-      // If moving to the final step, simulate processing and then finish
-      if (currentStep + 1 === steps.length - 1) {
-        handleFinish();
+  // Dados básicos
+  const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('Admin');
+  const [password, setPassword] = useState('');
+  const [themeMode, setThemeMode] = useState<'dark' | 'light'>('dark');
+  const [accentColor, setAccentColor] = useState('#2563eb');
+
+  // Progresso da etapa de instalação
+  const [progress, setProgress] = useState(0);
+  const [statusText, setStatusText] = useState('Iniciando...');
+
+  const handleNext = () => {
+    if (step < STEPS.length - 1) {
+      const nextStep = step + 1;
+      setStep(nextStep);
+
+      if (nextStep === 3) {
+        runInstallation();
       }
     }
   };
 
-  const handleFinish = async () => {
-    // Simulate setup processing
-    await new Promise(r => setTimeout(r, 2500));
-    
-    // 1. Create the profile data
-    const newProfile = {
-      username: username || 'User',
-      displayName: displayName || username || 'Obsidian User',
-      password: password,
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username || 'Admin'}`,
-      isAdmin: true,
-      lastLogin: Date.now()
-    };
-
-    // 2. Create profile and set as current in store
-    createProfile(newProfile);
-    useUserStore.setState({ currentUser: newProfile, isAuthenticated: false });
-
-    // 3. Update Kernel's user state (This is critical for LockScreen to see the right user)
-    kernel.setCurrentUser(newProfile);
-    kernel.sysCreateUserHome(username);
-    kernel.persistSystemState();
-
-    // 4. Set the chosen theme
-    setTheme({ accentColor });
-
-    // 5. Mark setup as completed — zero the registry flag so it never shows again
-    kernel.regSetValue('HKEY_LOCAL_MACHINE\\SYSTEM\\Setup\\SetupInProgress', 'REG_DWORD', 0);
-    kernel.regSetValue('HKEY_LOCAL_MACHINE\\SYSTEM\\Setup\\OOBEInProgress', 'REG_DWORD', 0);
-    localStorage.setItem('obsidianos-setup-completed', 'true');
-    
-    // 6. Boot into login
-    kernel.bootPhase = 'WINLOGON';
-  };
-
-  const renderStep = () => {
-    switch (steps[currentStep].id) {
-      case 'welcome':
-        return (
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }} 
-            animate={{ opacity: 1, x: 0 }} 
-            exit={{ opacity: 0, x: -20 }}
-            className="setup-step"
-          >
-            <h1 className="setup-title">Olá, vamos começar.</h1>
-            <p className="setup-description" style={{ color: 'var(--text-secondary)', marginBottom: '32px' }}>
-              Parabéns por escolher o ObsidianOS. Estamos felizes em ter você aqui.
-              Vamos configurar algumas coisas básicas para deixar o sistema pronto para você.
-            </p>
-            <div className="setup-illustration-small" style={{ fontSize: '48px' }}>✨</div>
-          </motion.div>
-        );
-
-      case 'user':
-        return (
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}
-            className="setup-form"
-          >
-            <h1 className="setup-title">Sua Conta</h1>
-            <div className="setup-field">
-              <label>Nome Completo</label>
-              <input 
-                className="setup-input" 
-                placeholder="Ex: João da Silva" 
-                value={displayName}
-                onChange={e => setDisplayName(e.target.value)}
-              />
-            </div>
-            <div className="setup-field">
-              <label>Nome de Usuário</label>
-              <input 
-                className="setup-input" 
-                placeholder="Ex: joao123" 
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-              />
-            </div>
-            <div className="setup-field">
-              <label>Senha (opcional)</label>
-              <input 
-                type="password" 
-                className="setup-input" 
-                placeholder="••••••••" 
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-              />
-            </div>
-          </motion.div>
-        );
-
-      case 'theme':
-        return (
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}
-          >
-            <h1 className="setup-title">Escolha uma Cor</h1>
-            <div className="setup-themes">
-              {['#6366f1', '#f43f5e', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4'].map(color => (
-                <div 
-                  key={color}
-                  className={`theme-card ${accentColor === color ? 'selected' : ''}`}
-                  onClick={() => setAccentColor(color)}
-                >
-                  <div className="theme-preview" style={{ background: color }} />
-                  <span className="theme-name">{color}</span>
-                </div>
-              ))}
-            </div>
-          </motion.div>
-        );
-
-      case 'finalizing':
-        return (
-          <motion.div 
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="finalizing-container"
-          >
-            <div className="loading-spinner" />
-            <h1 className="setup-title">Preparando tudo...</h1>
-            <p style={{ color: 'var(--text-secondary)' }}>Isso levará apenas alguns segundos. Não desligue o seu PC.</p>
-          </motion.div>
-        );
-
-      default:
-        return null;
+  const handleBack = () => {
+    if (step > 0 && step < 3) {
+      setStep(step - 1);
     }
   };
 
+  const runInstallation = async () => {
+    const finalUsername = username.trim() || 'Admin';
+    const finalDisplayName = displayName.trim() || finalUsername;
+    const userHome = `C:\\Users\\${finalUsername}`;
+
+    // Lista de operações reais do Kernel e VFS
+    const realOperations: Array<{
+      desc: string;
+      action: () => void | Promise<void>;
+    }> = [
+      {
+        desc: `Criando diretório base: C:\\Users\\${finalUsername}`,
+        action: () => kernel.fsCreateDirectory('C:\\Users', finalUsername),
+      },
+      {
+        desc: `Criando pasta de trabalho: ${userHome}\\Desktop`,
+        action: () => kernel.fsCreateDirectory(userHome, 'Desktop'),
+      },
+      {
+        desc: `Criando pasta: ${userHome}\\Documents`,
+        action: () => kernel.fsCreateDirectory(userHome, 'Documents'),
+      },
+      {
+        desc: `Criando pasta: ${userHome}\\Downloads`,
+        action: () => kernel.fsCreateDirectory(userHome, 'Downloads'),
+      },
+      {
+        desc: `Criando pasta: ${userHome}\\Pictures`,
+        action: () => kernel.fsCreateDirectory(userHome, 'Pictures'),
+      },
+      {
+        desc: `Criando pasta: ${userHome}\\Music`,
+        action: () => kernel.fsCreateDirectory(userHome, 'Music'),
+      },
+      {
+        desc: `Criando pasta: ${userHome}\\Videos`,
+        action: () => kernel.fsCreateDirectory(userHome, 'Videos'),
+      },
+      {
+        desc: `Criando pasta do sistema: ${userHome}\\AppData`,
+        action: () => kernel.fsCreateDirectory(userHome, 'AppData'),
+      },
+      {
+        desc: `Criando pasta: ${userHome}\\AppData\\Local`,
+        action: () => kernel.fsCreateDirectory(`${userHome}\\AppData`, 'Local'),
+      },
+      {
+        desc: `Criando pasta: ${userHome}\\AppData\\Roaming`,
+        action: () => kernel.fsCreateDirectory(`${userHome}\\AppData`, 'Roaming'),
+      },
+      {
+        desc: `Gravando arquivo: ${userHome}\\Desktop\\readme.txt`,
+        action: () =>
+          kernel.fsCreateFile(
+            `${userHome}\\Desktop`,
+            'readme.txt',
+            'Bem-vindo ao ObsidianOS!\n\nEste é o seu sistema operacional rodando com persistência de dados no navegador.\nExplore os aplicativos, crie arquivos e use o terminal para administrar o sistema.\n',
+            'txt'
+          ),
+      },
+      {
+        desc: `Gravando arquivo: ${userHome}\\Documents\\notes.txt`,
+        action: () =>
+          kernel.fsCreateFile(
+            `${userHome}\\Documents`,
+            'notes.txt',
+            'Notas Iniciais\n==============\n- Sistema instalado com sucesso.\n- Explore o Terminal para comandos nativos e OSL.\n',
+            'txt'
+          ),
+      },
+      {
+        desc: `Gravando chave de registro: HKEY_CURRENT_USER\\Software\\ObsidianOS\\Theme`,
+        action: () => {
+          kernel.regSetValue(
+            'HKEY_CURRENT_USER\\Software\\ObsidianOS\\Theme\\Mode',
+            'REG_SZ',
+            themeMode
+          );
+          kernel.regSetValue(
+            'HKEY_CURRENT_USER\\Software\\ObsidianOS\\Theme\\AccentColor',
+            'REG_SZ',
+            accentColor
+          );
+        },
+      },
+      {
+        desc: `Gravando registro: HKEY_LOCAL_MACHINE\\SOFTWARE\\RegisteredOwner`,
+        action: () =>
+          kernel.regSetValue(
+            'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\RegisteredOwner',
+            'REG_SZ',
+            finalDisplayName
+          ),
+      },
+      {
+        desc: `Atualizando permissões e usuário no subsistema de segurança (lsass)...`,
+        action: () => {
+          const newProfile = {
+            username: finalUsername,
+            displayName: finalDisplayName,
+            password: password,
+            avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${finalUsername}`,
+            isAdmin: true,
+            lastLogin: Date.now(),
+          };
+          createProfile(newProfile);
+          useUserStore.setState({ currentUser: newProfile, isAuthenticated: false });
+          kernel.setCurrentUser(newProfile);
+        },
+      },
+      {
+        desc: `Aplicando configurações de tema no sistema...`,
+        action: () =>
+          setTheme({
+            mode: themeMode,
+            accentColor: accentColor,
+          }),
+      },
+      {
+        desc: `Finalizando assistente de instalação (SetupInProgress = 0)...`,
+        action: () => {
+          kernel.regSetValue('HKEY_LOCAL_MACHINE\\SYSTEM\\Setup\\SetupInProgress', 'REG_DWORD', 0);
+          kernel.regSetValue('HKEY_LOCAL_MACHINE\\SYSTEM\\Setup\\OOBEInProgress', 'REG_DWORD', 0);
+          localStorage.setItem('obsidianos-setup-completed', 'true');
+        },
+      },
+      {
+        desc: `Persistindo estado do sistema e gravando no disco virtual...`,
+        action: () => kernel.persistSystemState(),
+      },
+    ];
+
+    // Executa as operações reais sequencialmente e atualiza o progresso ao vivo
+    const totalOps = realOperations.length;
+    for (let i = 0; i < totalOps; i++) {
+      const op = realOperations[i];
+      setStatusText(op.desc);
+      const pct = Math.round(((i + 1) / totalOps) * 100);
+      setProgress(pct);
+
+      await op.action();
+      // Pequeno intervalo para permitir renderização fluida e legibilidade dos arquivos reais sendo criados
+      await new Promise((r) => setTimeout(r, 120));
+    }
+
+    setStatusText('Instalação concluída com sucesso! Iniciando logon...');
+    await new Promise((r) => setTimeout(r, 600));
+
+    kernel.bootPhase = 'WINLOGON';
+  };
+
   return (
-    <div className="setup-wizard">
-      <div className="setup-bg-decorator" style={{ top: '-10%', right: '-10%' }} />
-      <div className="setup-bg-decorator" style={{ bottom: '-10%', left: '-10%', background: 'radial-gradient(circle, var(--accent) 0%, transparent 70%)' }} />
-      
-      <motion.div 
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="setup-container"
-      >
-        <div className="setup-left">
-          <div className="setup-illustration">
-            {currentStep === 0 && '👋'}
-            {currentStep === 1 && '👤'}
-            {currentStep === 2 && '🎨'}
-            {currentStep === 3 && '🚀'}
+    <div className="setup-classic-screen">
+      <div className="setup-classic-window">
+        {/* Barra de Título da Janela de Instalação */}
+        <div className="setup-titlebar">
+          <div className="setup-titlebar-title">
+            <span className="setup-titlebar-icon">🪟</span>
+            <span>Instalação do ObsidianOS — Versão 24H2</span>
           </div>
-          <h2>Obsidian OS</h2>
-          <p>
-            {currentStep === 0 && 'Uma experiência fluida, moderna e poderosa direto no seu navegador.'}
-            {currentStep === 1 && 'Sua conta será usada para sincronizar arquivos e configurações com o LiveMode.'}
-            {currentStep === 2 && 'O sistema se adapta ao seu estilo. Escolha a cor que mais combina com você.'}
-            {currentStep === 3 && 'Estamos configurando seu perfil, registro de sistema e área de trabalho.'}
-          </p>
         </div>
 
-        <div className="setup-right">
-          <div className="setup-step-indicator">
-            {steps.map((_, i) => (
-              <div key={i} className={`step-dot ${i === currentStep ? 'active' : ''}`} />
-            ))}
+        {/* Cabeçalho do Assistente */}
+        <div className="setup-header">
+          <div className="setup-header-text">
+            <h2>{STEPS[step].title}</h2>
+            <p>
+              {step === 0 && 'O assistente irá configurar o sistema operacional no seu navegador.'}
+              {step === 1 && 'Especifique o nome de usuário e a senha para a conta principal.'}
+              {step === 2 && 'Selecione as preferências visuais padrão da área de trabalho.'}
+              {step === 3 && 'Aguarde enquanto o sistema instala os componentes necessários.'}
+            </p>
           </div>
+        </div>
 
-          <div className="setup-content">
-            <AnimatePresence mode="wait">
-              {renderStep()}
-            </AnimatePresence>
-          </div>
+        {/* Área Central / Conteúdo dos Passos */}
+        <div className="setup-body">
+          {step === 0 && (
+            <div className="setup-pane">
+              <p className="setup-text">
+                Bem-vindo ao <strong>ObsidianOS</strong>.
+              </p>
+              <p className="setup-text">
+                Este assistente instalará e preparará os arquivos de sistema, o registro e a conta de usuário padrão.
+              </p>
 
-          {currentStep < steps.length - 1 && (
-            <div className="setup-footer">
-              {currentStep > 0 && (
-                <button className="setup-btn setup-btn-secondary" onClick={() => setCurrentStep(s => s - 1)}>
-                  Voltar
-                </button>
-              )}
-              <button 
-                className="setup-btn setup-btn-primary" 
-                onClick={nextStep}
-                disabled={currentStep === 1 && !username}
-              >
-                Próximo
-              </button>
+              <div className="setup-groupbox">
+                <legend>Configurações Regionais</legend>
+                <div className="setup-form-row">
+                  <label>Idioma do sistema:</label>
+                  <select className="setup-classic-select" defaultValue="pt-BR" disabled>
+                    <option value="pt-BR">Português (Brasil)</option>
+                  </select>
+                </div>
+                <div className="setup-form-row">
+                  <label>Teclado ou método de entrada:</label>
+                  <select className="setup-classic-select" defaultValue="ABNT2">
+                    <option value="ABNT2">Português (Brasil - ABNT2)</option>
+                    <option value="US">Estados Unidos (Internacional)</option>
+                  </select>
+                </div>
+              </div>
+
+              <p className="setup-note">
+                Clique em <strong>Avançar</strong> para prosseguir com a instalação.
+              </p>
+            </div>
+          )}
+
+          {step === 1 && (
+            <div className="setup-pane">
+              <p className="setup-text">
+                Informe as credenciais da conta de administrador:
+              </p>
+
+              <div className="setup-groupbox">
+                <legend>Informações da Conta</legend>
+                <div className="setup-form-row">
+                  <label>Nome do usuário:</label>
+                  <input
+                    type="text"
+                    className="setup-classic-input"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="Admin"
+                    autoFocus
+                  />
+                </div>
+                <div className="setup-form-row">
+                  <label>Nome completo:</label>
+                  <input
+                    type="text"
+                    className="setup-classic-input"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="Administrador"
+                  />
+                </div>
+                <div className="setup-form-row">
+                  <label>Senha:</label>
+                  <input
+                    type="password"
+                    className="setup-classic-input"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Opcional"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="setup-pane">
+              <p className="setup-text">
+                Escolha o tema básico da interface:
+              </p>
+
+              <div className="setup-groupbox">
+                <legend>Modo de Exibição</legend>
+                <div className="setup-radio-row">
+                  <label>
+                    <input
+                      type="radio"
+                      name="themeMode"
+                      checked={themeMode === 'dark'}
+                      onChange={() => setThemeMode('dark')}
+                    />
+                    <span>Tema Escuro (Padrão)</span>
+                  </label>
+                  <label style={{ marginLeft: '24px' }}>
+                    <input
+                      type="radio"
+                      name="themeMode"
+                      checked={themeMode === 'light'}
+                      onChange={() => setThemeMode('light')}
+                    />
+                    <span>Tema Claro</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="setup-groupbox" style={{ marginTop: '16px' }}>
+                <legend>Cor de Destaque</legend>
+                <div className="setup-form-row">
+                  <label>Cor do sistema:</label>
+                  <select
+                    className="setup-classic-select"
+                    value={accentColor}
+                    onChange={(e) => setAccentColor(e.target.value)}
+                  >
+                    <option value="#2563eb">Azul Padrão (#2563eb)</option>
+                    <option value="#4f46e5">Índigo (#4f46e5)</option>
+                    <option value="#06b6d4">Ciano (#06b6d4)</option>
+                    <option value="#10b981">Verde (#10b981)</option>
+                    <option value="#f59e0b">Âmbar (#f59e0b)</option>
+                    <option value="#ef4444">Vermelho (#ef4444)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="setup-pane">
+              <p className="setup-text" style={{ marginBottom: '16px' }}>
+                Aguarde enquanto os componentes do ObsidianOS são instalados:
+              </p>
+
+              <div className="setup-progress-container">
+                <div
+                  className="setup-progress-bar"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+
+              <p className="setup-progress-label">
+                {statusText} ({progress}%)
+              </p>
             </div>
           )}
         </div>
-      </motion.div>
+
+        {/* Rodapé Clássico com Divisória e Botões */}
+        <div className="setup-footer-bar">
+          <div className="setup-buttons-group">
+            {step > 0 && step < 3 && (
+              <button className="setup-classic-btn" onClick={handleBack}>
+                &lt; Voltar
+              </button>
+            )}
+
+            {step < 3 && (
+              <button
+                className="setup-classic-btn primary"
+                onClick={handleNext}
+                disabled={step === 1 && !username.trim()}
+              >
+                Avançar &gt;
+              </button>
+            )}
+
+            {step === 3 && (
+              <button className="setup-classic-btn" disabled>
+                Aguarde...
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 /* ============================================ */
-/* Lock Screen Styles                           */
+/* Lock Screen / Login Screen Styles            */
 /* ============================================ */
 
 .lock-screen {
@@ -10,148 +10,535 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #0a0a1a 0%, #111128 50%, #0d0d1e 100%);
-  cursor: pointer;
-  transition: all 0.6s var(--ease-out-expo);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  overflow: hidden;
+  user-select: none;
+  font-family: var(--font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif);
+  transition: opacity 0.5s ease, transform 0.5s ease;
 }
 
 .lock-screen.unlocking {
   opacity: 0;
-  transform: scale(1.1);
+  transform: scale(1.05);
   pointer-events: none;
 }
 
-/* Time */
-.lock-time-container {
-  text-align: center;
-  animation: slideUp 0.6s var(--ease-out-expo);
+/* Camada acrílica sobre o wallpaper */
+.lock-acrylic-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(0px);
+  -webkit-backdrop-filter: blur(0px);
+  transition: backdrop-filter 0.5s cubic-bezier(0.16, 1, 0.3, 1),
+              background 0.5s ease;
+  pointer-events: none;
+  z-index: 1;
 }
 
-.lock-time {
-  font-size: 96px;
-  font-weight: 600;
-  color: #ffffff;
-  letter-spacing: -2px;
-  line-height: 1;
-  text-shadow: 0 2px 20px rgba(0, 0, 0, 0.3);
+.lock-acrylic-overlay.blurred {
+  background: rgba(8, 8, 16, 0.55);
+  backdrop-filter: blur(32px) saturate(140%) brightness(0.72);
+  -webkit-backdrop-filter: blur(32px) saturate(140%) brightness(0.72);
 }
 
-.lock-date {
-  font-size: 18px;
-  color: rgba(255, 255, 255, 0.85);
-  margin-top: 8px;
-  text-transform: capitalize;
-}
-
-/* Login Panel */
-.login-panel {
+/* ── Seção do Relógio (Lock view) ─────────────────────────────────── */
+.lock-clock-section {
+  position: relative;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  animation: scaleIn 0.4s var(--ease-out-expo);
+  text-align: center;
+  transform: translateY(0);
+  opacity: 1;
+  transition: transform 0.55s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.4s ease;
+  cursor: pointer;
 }
 
-.login-avatar {
-  margin-bottom: 8px;
+.lock-clock-section.slid-up {
+  transform: translateY(-90px);
+  opacity: 0;
+  pointer-events: none;
 }
 
-.avatar-circle {
-  width: 96px;
-  height: 96px;
+.lock-time {
+  font-size: 104px;
+  font-weight: 600;
+  color: #ffffff;
+  letter-spacing: -3px;
+  line-height: 1;
+  text-shadow: 0 4px 28px rgba(0, 0, 0, 0.45);
+}
+
+.lock-date {
+  font-size: 20px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.95);
+  margin-top: 14px;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.4);
+  text-transform: capitalize;
+}
+
+.lock-swipe-hint {
+  margin-top: 48px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.65);
+  letter-spacing: 0.3px;
+  animation: subtlePulse 3s ease-in-out infinite;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+}
+
+@keyframes subtlePulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.9; }
+}
+
+/* ── Card de Login Centralizado ────────────────────────────────────── */
+.login-card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  transform: translate(-50%, -42%) scale(0.96);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.4s ease;
+  width: 320px;
+}
+
+.login-card.visible {
+  transform: translate(-50%, -50%) scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Botão voltar para a tela do relógio */
+.login-back-btn {
+  position: absolute;
+  top: -46px;
+  left: -20px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
-  box-shadow: 0 4px 24px rgba(99, 102, 241, 0.35);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(8px);
 }
 
-.login-username {
-  font-size: 24px;
+.login-back-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+  transform: scale(1.08);
+}
+
+/* Avatar com anel de acento */
+.login-avatar-wrapper {
+  margin-bottom: 12px;
+}
+
+.login-avatar-ring {
+  width: 108px;
+  height: 108px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(255,255,255,0.2), rgba(255,255,255,0.05));
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.login-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.login-avatar-fallback {
+  color: rgba(255, 255, 255, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-user-info {
+  margin-bottom: 20px;
+}
+
+.login-displayname {
+  font-size: 22px;
+  font-weight: 500;
+  color: #ffffff;
+  letter-spacing: -0.2px;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.login-role-badge {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+  margin-top: 2px;
+}
+
+/* Input container estilo Windows 11 Acrylic */
+.login-box {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.login-box.shake-error {
+  animation: errorShake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@keyframes errorShake {
+  10%, 90% { transform: translate3d(-3px, 0, 0); }
+  20%, 80% { transform: translate3d(5px, 0, 0); }
+  30%, 50%, 70% { transform: translate3d(-5px, 0, 0); }
+  40%, 60% { transform: translate3d(5px, 0, 0); }
+}
+
+.login-input-container {
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 2px 4px 2px 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s ease;
+}
+
+.login-input-container:focus-within {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.45);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25);
+}
+
+.login-password-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #ffffff;
+  font-size: 14px;
+  padding: 8px 0;
+  font-family: inherit;
+}
+
+.login-password-input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.login-eye-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: color 0.15s ease;
+}
+
+.login-eye-btn:hover {
+  color: #ffffff;
+}
+
+.login-submit-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  margin-left: 4px;
+}
+
+.login-submit-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.35);
+  transform: scale(1.04);
+}
+
+.login-submit-btn:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.login-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.login-error-msg {
+  font-size: 13px;
+  color: #ff6b6b;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+.login-status-msg {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.login-subhint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* ── Barra de Ações do Sistema (Canto Inferior Direito) ────────────── */
+.lock-sys-actions {
+  position: absolute;
+  bottom: 24px;
+  right: 28px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lock-menu-container {
+  position: relative;
+}
+
+.lock-sys-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  transition: all 0.2s ease;
+}
+
+.lock-sys-btn:hover,
+.lock-sys-btn.active {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.38);
+  color: #ffffff;
+  transform: translateY(-2px);
+}
+
+/* Popovers estilo menu nativo */
+.lock-popover-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  min-width: 280px;
+  background: rgba(24, 24, 34, 0.94);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  animation: popoverIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 30;
+}
+
+.lock-popover-menu.power-menu {
+  min-width: 190px;
+}
+
+@keyframes popoverIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.lock-popover-header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: rgba(255, 255, 255, 0.5);
+  padding: 6px 10px 4px 10px;
+}
+
+.lock-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
+  width: 100%;
+}
+
+.lock-popover-item:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.lock-popover-item.primary:hover {
+  background: rgba(99, 102, 241, 0.25);
+}
+
+.lock-popover-item.danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+.lock-popover-icon {
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lock-popover-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.lock-popover-label {
+  font-size: 13px;
   font-weight: 500;
   color: #ffffff;
 }
 
-.login-input-wrapper {
+.lock-popover-sub {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* ── Modal Flutuante do Terminal no LockScreen ──────────────────────── */
+.lock-terminal-modal {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 740px;
+  height: 480px;
+  max-width: 94vw;
+  max-height: 86vh;
+  background: #0c0c0c;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.75);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 100;
+  animation: popoverIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.lock-terminal-modal.maximized {
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  max-height: 100vh;
+  border-radius: 0;
+  border: none;
+}
+
+.lock-terminal-header {
+  height: 38px;
+  background: #18181c;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   display: flex;
   align-items: center;
-  background: rgba(255, 255, 255, 0.08);
-  border: 2px solid rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  transition: all var(--transition-normal);
-  width: 280px;
+  justify-content: space-between;
+  padding: 0 8px 0 14px;
 }
 
-.login-input-wrapper:focus-within {
-  border-color: var(--accent);
-  background: rgba(255, 255, 255, 0.1);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+.lock-terminal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: monospace;
 }
 
-.login-input-wrapper.error {
-  border-color: #ef4444;
-  animation: shake 0.4s ease;
+.lock-terminal-icon {
+  font-size: 14px;
 }
 
-.login-input {
-  flex: 1;
-  background: none;
+.lock-terminal-controls {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.lock-terminal-btn {
+  width: 36px;
+  height: 100%;
+  background: transparent;
   border: none;
-  outline: none;
-  color: #ffffff;
-  padding: 10px 16px;
-  font-size: var(--font-size-base);
-  font-family: var(--font-family);
-}
-
-.login-input::placeholder {
-  color: rgba(255, 255, 255, 0.4);
-}
-
-.login-submit {
-  width: 40px;
-  height: 40px;
+  color: rgba(255, 255, 255, 0.75);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--accent);
-  border: none;
-  color: white;
   cursor: pointer;
-  transition: background var(--transition-fast);
+  font-size: 12px;
+  transition: background 0.15s ease;
 }
 
-.login-submit:hover {
-  background: var(--accent-hover);
+.lock-terminal-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
 }
 
-.login-error {
-  color: #ef4444;
-  font-size: var(--font-size-sm);
-  animation: fadeIn 0.3s ease;
+.lock-terminal-btn.close:hover {
+  background: #e81123;
+  color: #ffffff;
 }
 
-.login-hint {
-  color: rgba(255, 255, 255, 0.35);
-  font-size: var(--font-size-sm);
-  margin-top: 8px;
-}
-
-/* Bottom hint on lock */
-.lock-hint {
-  position: absolute;
-  bottom: 48px;
-  color: rgba(255, 255, 255, 0.4);
-  font-size: var(--font-size-md);
-  animation: pulse 3s ease-in-out infinite;
-}
-
-/* Animations */
-@keyframes shake {
-  0%, 100% { transform: translateX(0); }
-  20%, 60% { transform: translateX(-8px); }
-  40%, 80% { transform: translateX(8px); }
+.lock-terminal-body {
+  flex: 1;
+  background: #0c0c0c;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }

@@ -1,249 +1,248 @@
-.setup-wizard {
+/* ============================================ */
+/* SetupWizard - Interface Básica de Instalador */
+/* ============================================ */
+
+.setup-classic-screen {
   position: fixed;
   inset: 0;
   z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
-  font-family: var(--font-family);
-  background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.15), transparent),
-              radial-gradient(circle at bottom left, rgba(79, 70, 229, 0.1), transparent),
-              #0a0a0f;
+  background-color: #0b0c10; /* Fundo escuro sólido, zero glow */
+  user-select: none;
+  font-family: var(--font-family, 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif);
 }
 
-/* Background animated circles */
-.setup-bg-decorator {
-  position: absolute;
-  width: 600px;
-  height: 600px;
-  background: radial-gradient(circle, var(--accent-subtle) 0%, transparent 70%);
-  filter: blur(80px);
-  z-index: -1;
-  opacity: 0.5;
-}
-
-.setup-container {
-  width: 900px;
-  height: 600px;
-  background: var(--acrylic);
-  backdrop-filter: blur(40px) saturate(180%);
-  -webkit-backdrop-filter: blur(40px) saturate(180%);
-  border-radius: 24px;
-  border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-xl);
-  display: flex;
-  overflow: hidden;
-  position: relative;
-}
-
-/* Left Illustration Panel */
-.setup-left {
-  flex: 0 0 380px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(79, 70, 229, 0.1));
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
-  border-right: 1px solid var(--border-subtle);
-}
-
-.setup-illustration {
-  font-size: 160px;
-  margin-bottom: 24px;
-  filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.3));
-}
-
-.setup-left h2 {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--text-primary);
-  text-align: center;
-  margin-bottom: 12px;
-}
-
-.setup-left p {
-  font-size: 14px;
-  color: var(--text-secondary);
-  text-align: center;
-  line-height: 1.6;
-}
-
-/* Right Content Panel */
-.setup-right {
-  flex: 1;
-  padding: 60px;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-}
-
-.setup-step-indicator {
-  position: absolute;
-  top: 40px;
-  right: 60px;
-  display: flex;
-  gap: 8px;
-}
-
-.step-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 4px;
-  background: var(--border-strong);
-  transition: all 0.3s ease;
-}
-
-.step-dot.active {
-  width: 24px;
-  background: var(--accent);
-}
-
-.setup-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.setup-title {
-  font-size: 32px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin-bottom: 32px;
-}
-
-.setup-form {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  max-width: 400px;
-}
-
-.setup-field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.setup-field label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.setup-input {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  padding: 12px 16px;
-  color: var(--text-primary);
-  font-size: 15px;
-  transition: all 0.2s ease;
-}
-
-.setup-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
-  background: var(--bg-tertiary);
-}
-
-/* Footer Buttons */
-.setup-footer {
-  margin-top: 40px;
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-}
-
-.setup-btn {
-  padding: 12px 28px;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  border: 1px solid transparent;
-}
-
-.setup-btn-primary {
-  background: var(--accent);
-  color: white;
-}
-
-.setup-btn-primary:hover {
-  background: var(--accent-hover);
-  transform: translateY(-1px);
-}
-
-.setup-btn-secondary {
-  background: transparent;
-  color: var(--text-secondary);
-  border-color: var(--border-default);
-}
-
-.setup-btn-secondary:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-/* Theme Options */
-.setup-themes {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-}
-
-.theme-card {
-  background: var(--bg-secondary);
-  border: 2px solid transparent;
-  border-radius: 12px;
-  padding: 12px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.theme-card:hover {
-  background: var(--bg-tertiary);
-  transform: translateY(-2px);
-}
-
-.theme-card.selected {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
-
-.theme-preview {
-  width: 60px;
-  height: 40px;
+/* ── Janela do Instalador ─────────────────────────────────────────── */
+.setup-classic-window {
+  width: 620px;
+  background-color: #1a1b22;
+  border: 1px solid #333642;
   border-radius: 6px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.theme-name {
+/* ── Barra de Título ──────────────────────────────────────────────── */
+.setup-titlebar {
+  height: 32px;
+  background-color: #121318;
+  border-bottom: 1px solid #2b2d38;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+}
+
+.setup-titlebar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
   font-weight: 500;
+  color: #d1d5db;
 }
 
-/* Finalizing Animation */
-.finalizing-container {
+.setup-titlebar-icon {
+  font-size: 13px;
+}
+
+/* ── Cabeçalho do Assistente ──────────────────────────────────────── */
+.setup-header {
+  background-color: #14151c;
+  border-bottom: 1px solid #2b2d38;
+  padding: 16px 24px;
+}
+
+.setup-header-text h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: #ffffff;
+  margin: 0 0 4px 0;
+}
+
+.setup-header-text p {
+  font-size: 12px;
+  color: #9ca3af;
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* ── Corpo Central ────────────────────────────────────────────────── */
+.setup-body {
+  padding: 24px;
+  min-height: 240px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 24px;
 }
 
-.loading-spinner {
-  width: 48px;
-  height: 48px;
-  border: 4px solid var(--border-default);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
+.setup-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.setup-text {
+  font-size: 13px;
+  color: #d1d5db;
+  margin: 0 0 12px 0;
+  line-height: 1.5;
+}
+
+.setup-note {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-top: 16px;
+}
+
+/* ── Groupbox Clássico ────────────────────────────────────────────── */
+.setup-groupbox {
+  border: 1px solid #2e313d;
+  border-radius: 4px;
+  padding: 14px 16px;
+  margin-top: 8px;
+  position: relative;
+}
+
+.setup-groupbox legend {
+  font-size: 11px;
+  font-weight: 600;
+  color: #9ca3af;
+  padding: 0 6px;
+}
+
+.setup-form-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.setup-form-row:last-child {
+  margin-bottom: 0;
+}
+
+.setup-form-row label {
+  font-size: 12px;
+  color: #d1d5db;
+  width: 170px;
+}
+
+/* ── Inputs e Selects Padrão de SO ────────────────────────────────── */
+.setup-classic-input,
+.setup-classic-select {
+  flex: 1;
+  background-color: #121318;
+  border: 1px solid #3b3e4d;
+  border-radius: 3px;
+  padding: 6px 10px;
+  color: #ffffff;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+
+.setup-classic-input:focus,
+.setup-classic-select:focus {
+  border-color: #2563eb;
+}
+
+.setup-classic-select:disabled {
+  background-color: #181920;
+  color: #6b7280;
+  border-color: #2b2d38;
+}
+
+.setup-radio-row {
+  display: flex;
+  align-items: center;
+  padding-top: 4px;
+}
+
+.setup-radio-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #d1d5db;
+  cursor: pointer;
+}
+
+.setup-radio-row input[type='radio'] {
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+/* ── Barra de Progresso Clássica ──────────────────────────────────── */
+.setup-progress-container {
+  width: 100%;
+  height: 18px;
+  background-color: #121318;
+  border: 1px solid #3b3e4d;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.setup-progress-bar {
+  height: 100%;
+  background-color: #2563eb;
+  transition: width 0.3s ease;
+}
+
+.setup-progress-label {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-top: 10px;
+  font-family: monospace;
+}
+
+/* ── Rodapé com Divisória e Botões ────────────────────────────────── */
+.setup-footer-bar {
+  background-color: #14151c;
+  border-top: 1px solid #2b2d38;
+  padding: 12px 20px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.setup-buttons-group {
+  display: flex;
+  gap: 8px;
+}
+
+.setup-classic-btn {
+  min-width: 84px;
+  padding: 6px 14px;
+  background-color: #242630;
+  border: 1px solid #3d4150;
+  border-radius: 3px;
+  color: #d1d5db;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.setup-classic-btn:hover:not(:disabled) {
+  background-color: #2d303d;
+  color: #ffffff;
+  border-color: #4f5366;
+}
+
+.setup-classic-btn.primary {
+  background-color: #1e3a8a;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+
+.setup-classic-btn.primary:hover:not(:disabled) {
+  background-color: #2563eb;
+}
+
+.setup-classic-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

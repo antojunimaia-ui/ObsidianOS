@@ -42,19 +42,34 @@ export default function TerminalApp({ windowId }: { windowId: string }) {
     // ALL outputs from this exact moment until we know the PID.
     // Even better, createProcess doesn't emit until inside, but we can't know the PID beforehand.
     let createdPid: number | null = null;
+    const terminalPids = new Set<number>();
+
+    const unsubCreated = kernel.on('process:created', (p: any) => {
+      if (p.windowId === windowId || (createdPid !== null && p.ppid === createdPid)) {
+        terminalPids.add(p.pid);
+      }
+    });
+
+    const isFromShellOrChild = (pid: number) => {
+      if (createdPid === null) return true;
+      if (pid === createdPid) return true;
+      if (terminalPids.has(pid)) return true;
+      const proc = kernel.getProcess(pid);
+      if (proc?.ppid === createdPid || proc?.windowId === windowId) {
+        terminalPids.add(pid);
+        return true;
+      }
+      return false;
+    };
 
     const unsubOut = kernel.on('process:stdout', (data: { pid: number, message: string }) => {
-      if (createdPid !== null && data.pid !== createdPid) return;
-      if (createdPid === null || data.pid === createdPid) {
-        addOutput(data.message, 'output');
-      }
+      if (!isFromShellOrChild(data.pid)) return;
+      addOutput(data.message, 'output');
     });
     
     const unsubErr = kernel.on('process:stderr', (data: { pid: number, message: string }) => {
-      if (createdPid !== null && data.pid !== createdPid) return;
-      if (createdPid === null || data.pid === createdPid) {
-        addOutput(data.message, 'error');
-      }
+      if (!isFromShellOrChild(data.pid)) return;
+      addOutput(data.message, 'error');
     });
 
     const unsubExit = kernel.on('process:terminated', (pid: number) => {
@@ -65,9 +80,11 @@ export default function TerminalApp({ windowId }: { windowId: string }) {
     });
 
     createdPid = kernel.createProcess('cmd.osl', 'ObsidianOS Shell', '🐚', windowId, 'C:\\ObsidianOS\\System32\\cmd.osl');
+    terminalPids.add(createdPid);
     setShellPid(createdPid);
 
     return () => {
+      unsubCreated();
       unsubOut();
       unsubErr();
       unsubExit();
@@ -87,11 +104,21 @@ export default function TerminalApp({ windowId }: { windowId: string }) {
       return newLines;
     });
 
+    // Intercepta comando de formatação do sistema
+    if (cmd.trim() === 'user -reset --sys') {
+      addOutput('\n>>> ATENCAO: Formatacao do sistema ObsidianOS iniciada <<<', 'system');
+      addOutput('Limpando disco virtual OPFS, registro e redefinindo arquivos de fabrica...', 'system');
+      setTimeout(() => {
+        kernel.resetSystem(false);
+      }, 500);
+      return;
+    }
+
     // Send command to shell
     kernel.writeStdin(shellPid, cmd);
     setCommandHistory(prev => [...prev, cmd]);
     setHistoryIndex(-1);
-  }, [shellPid]);
+  }, [shellPid, addOutput]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {

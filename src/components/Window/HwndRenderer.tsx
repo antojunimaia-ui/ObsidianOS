@@ -7,7 +7,10 @@ export default function HwndRenderer({ windowId }: { windowId: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const { getWindow } = useWindowManager();
-  const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  const [dimensions] = useState<{ width: number; height: number }>(() => {
+    const win = getWindow(windowId);
+    return { width: win?.width || 800, height: win?.height || 600 };
+  });
   const [isRenderMode, setIsRenderMode] = useState<'canvas' | 'dom'>('canvas');
   const [domHtml, setDomHtml] = useState<string>('');
   const startedRef = useRef(false);
@@ -17,8 +20,6 @@ export default function HwndRenderer({ windowId }: { windowId: string }) {
   useEffect(() => {
     const win = getWindow(windowId);
     if (!win || !win.processId) return;
-
-    setDimensions({ width: win.width || 800, height: win.height || 600 });
 
     const currentProcId = win.processId;
     setProcId(currentProcId);
@@ -32,10 +33,33 @@ export default function HwndRenderer({ windowId }: { windowId: string }) {
       if (!ctx) return;
       for (const cmd of data.commands) {
         if (cmd.op === 'fillStyle') ctx.fillStyle = cmd.color;
+        if (cmd.op === 'strokeStyle') ctx.strokeStyle = cmd.color;
+        if (cmd.op === 'lineWidth') ctx.lineWidth = cmd.width ?? 1;
         if (cmd.op === 'fillRect') ctx.fillRect(cmd.x, cmd.y, cmd.w, cmd.h);
+        if (cmd.op === 'strokeRect') ctx.strokeRect(cmd.x, cmd.y, cmd.w, cmd.h);
         if (cmd.op === 'font') ctx.font = cmd.font;
         if (cmd.op === 'fillText') ctx.fillText(cmd.text, cmd.x, cmd.y);
         if (cmd.op === 'clearRect') ctx.clearRect(cmd.x, cmd.y, cmd.w, cmd.h);
+        if (cmd.op === 'line') {
+          ctx.beginPath();
+          if (cmd.color) ctx.strokeStyle = cmd.color;
+          if (cmd.width) ctx.lineWidth = cmd.width;
+          ctx.moveTo(cmd.x1, cmd.y1);
+          ctx.lineTo(cmd.x2, cmd.y2);
+          ctx.stroke();
+        }
+        if (cmd.op === 'circle') {
+          ctx.beginPath();
+          ctx.arc(cmd.x, cmd.y, cmd.r, 0, Math.PI * 2);
+          if (cmd.fill) {
+            if (cmd.color) ctx.fillStyle = cmd.color;
+            ctx.fill();
+          } else {
+            if (cmd.color) ctx.strokeStyle = cmd.color;
+            if (cmd.width) ctx.lineWidth = cmd.width;
+            ctx.stroke();
+          }
+        }
       }
     });
 
