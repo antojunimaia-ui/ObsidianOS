@@ -35,6 +35,7 @@
 - **Motor Gráfico Win32/GDI (`HwndRenderer`)**: Binários puros podem desenhar primitivas 2D (GDI Canvas) ou injetar interfaces DOM dinâmicas sem precisar de componentes React fixos.
 - **VFS Modular com Drivers OPFS / LocalStorage**: Sistema de arquivos hierárquico com permissões, atributos e carregamento sob demanda.
 - **14 Aplicativos Nativos**: Incluindo DOOM clássico (WebAssembly / js-dos), IDE Obsidian Code com syntax highlighting, Gravador de Tela/Câmera, App Store com runtime sandbox e Shell interativo OSL.
+- **Missão**: a diretriz de arquitetura está em [MISSION.md](MISSION.md) — migrar cada capacidade do sistema de código JS/TS embutido para artefatos do próprio OS (`.obx`, `.osl`, `.pmem`, registro, VFS). O kernel em TS é o bootstrap, não o destino.
 
 ---
 
@@ -89,20 +90,22 @@ ObsidianOS/
 │   │   │   └── system.pmem       # Snapshot binário de memória persistente
 │   │   ├── fs/                   # Filesystem Virtual Modular
 │   │   │   ├── apps.ts           # Definições de executáveis de apps (.obx)
-│   │   │   ├── binaries.ts       # Binários executáveis JS (bootmgr, ping, sysinfo, etc.)
+│   │   │   ├── binaries.ts       # Binários executáveis JS (bootmgr, ntoskrnl, lsass)
 │   │   │   ├── dirs.ts           # Estrutura de diretórios padrão (System32, Program Files...)
 │   │   │   ├── drivers.ts        # Drivers de dispositivo carregados na inicialização
 │   │   │   ├── helpers.ts        # Utilitários de manipulação do VFS
-│   │   │   ├── osl.ts            # Scripts de automação OSL de fábrica
+│   │   │   ├── osl.ts            # Utilitários/serviços do sistema em .osl (cmd, smss, explorer...)
 │   │   │   ├── sdk.ts            # Arquivos do SDK de desenvolvimento
 │   │   │   ├── system.ts         # DLLs, bibliotecas e arquivos de configuração
 │   │   │   └── user.ts           # Perfil padrão de usuário (Desktop, Documents, Wallpapers)
 │   │   └── osl/                  # Engine OSL (ObsidianOS Scripting Language)
 │   │       ├── lexer.ts          # Tokenizador léxico
 │   │       ├── parser.ts         # Analisador sintático (gerador de AST)
+│   │       ├── compiler.ts       # Compilador AST → bytecode OBX v2 (OVM)
 │   │       ├── interpreter.ts    # Interpretador com suporte a syscalls e PM
 │   │       ├── environment.ts    # Gerenciador de escopos e tabelas de símbolos
-│   │       └── types.ts          # Tipos do AST
+│   │       ├── types.ts          # Tipos do AST
+│   │       └── vm/               # Virtual Machine OVM (opcodes.ts + vm.ts)
 │   ├── stores/                   # Zustand Stores (Espelhos Reativos do Kernel)
 │   │   ├── fileSystem.ts         # Mirror reativo do VFS
 │   │   ├── registry.ts           # Mirror reativo do Registry
@@ -203,7 +206,7 @@ O Kernel (`src/core/kernel.ts`) opera como um **Singleton** de autoridade máxim
 // Ciclo de Vida e Boot
 kernel.powerOn()                      // Dispara POST da BIOS e bootmgr.obx
 kernel.finalizeBoot()                 // Conclui sequência de boot
-kernel.loadShell()                    // Carrega explorer.obx e descobre apps
+kernel.loadShell()                    // Carrega explorer.osl e descobre apps
 
 // Processos e Escalonamento
 kernel.createProcess(spec)            // Cria PCB, aloca PM space e adiciona à fila READY
@@ -292,17 +295,17 @@ O kernel despacha sinais clássicos de controle:
    │  └── ntfs.sys, disk.sys, display.sys, hid.sys, netio.sys
    └─ Invoca OS.finalizeBoot()
 
-3. kernel.loadShell()
-   ├─ Descobre manifestos em C:\Program Files\ObsidianOS Apps\
-   ├─ Inicia serviços em background:
-   │  ├── smss.obx (Session Manager)
-   │  ├── csrss.obx (Client Server Runtime)
-   │  ├── wininit.obx & services.obx (Service Control Manager)
-   │  ├── lsass.obx (Autenticação e segurança)
-   │  ├── svchost.obx (Host de serviços)
-   │  ├── dwm.obx (Desktop Window Manager)
-   │  └── explorer.obx (Shell e interface gráfica)
-   └─ Define BootPhase como 'DESKTOP_READY'
+3. Cadeia de serviços (migrados para scripts .osl no VFS):
+   ├─ bootmgr.obx spawna smss.osl (Session Manager)
+   │  └─ smss.osl spawna csrss.osl, wininit.osl e lsass.obx
+   │     ├─ wininit.osl spawna services.osl (Service Control Manager)
+   │     │  └─ services.osl spawna svchost.osl (Host de serviços)
+   │     ├─ csrss.osl registra o subsistema Win32 (crítico)
+   │     └─ lsass.obx (Autenticação e segurança) — ainda binário .obx
+   └─ kernel.loadShell() descobre apps e inicia o shell:
+      ├─ dwm.osl (Desktop Window Manager)
+      └─ explorer.osl (Shell e interface gráfica)
+         └─ BootPhase → 'WINLOGON' (ou 'OOBE' se SetupInProgress=1)
 ```
 
 ---
@@ -316,8 +319,8 @@ O kernel despacha sinais clássicos de controle:
   - Atributos reais (`readonly`, `hidden`, `system`, `archive`).
   - Permissões no formato Unix/Windows (`rwx`).
 - **Suporte a Executáveis Modernos**:
-  - Arquivos `.obx`: Binários executáveis JS do ecossistema ObsidianOS.
-  - Arquivos `.osl`: Scripts interpretados pelo engine OSL.
+  - Arquivos `.obx`: Executáveis do ecossistema ObsidianOS — binários JS ou módulos de bytecode OBX v2 compilados pela OVM.
+  - Arquivos `.osl`: Scripts do engine OSL (interpretador), compiláveis para `.obx` via `oslc`.
   - Arquivos `.pmem`: Snapshots de memória persistente.
 
 ### Registro do Sistema (Registry)
@@ -359,7 +362,7 @@ Para permitir que binários puramente em JavaScript (sem componentes React) crie
 
 ## 🔷 OSL — ObsidianOS Scripting Language
 
-O OSL é a linguagem de script oficial interpretada do ObsidianOS. Os arquivos possuem extensão `.osl` e rodam dentro da thread do SO com total segurança.
+O OSL é a linguagem de script oficial do ObsidianOS. Os arquivos possuem extensão `.osl` e rodam dentro da thread do SO com total segurança. Além do interpretador, o motor inclui um **compilador de bytecode** (OBX v2) e uma **Virtual Machine (OVM)**: o comando `oslc` (ou o syscall `system::compile`) transforma um `.osl` em um módulo `.obx` compilado, executado pela OVM.
 
 ### Exemplo de Código OSL
 ```osl
@@ -400,7 +403,15 @@ system::mem_snap();
 | `system::fs_delete(caminho)` | Remove arquivo ou diretório |
 | `system::fs_getcwd()` | Retorna diretório corrente de trabalho |
 | `system::fs_chdir(caminho)` | Altera diretório corrente |
+| `system::fs_mkdir(caminho)` | Cria diretório no VFS |
 | `system::reg_get(chave)` | Lê valor do registro |
+| `system::spawn(caminho, argStr)` | Executa outro binário/script e aguarda término |
+| `system::register_critical(stopCode, desc, componente, bugCheck)` | Registra o processo como crítico (BSOD se falhar) |
+| `system::declare_dependency(provedor)` | Declara dependência de outro processo (habilita cascata) |
+| `system::boot_log(msg)` | Escreve no log da sequência de boot |
+| `system::compile(código)` | Compila código OSL para bytecode OBX v2 (OVM) |
+| `system::set_boot_phase(fase)` | Altera a fase atual de boot |
+| `system::is_authenticated()` | Retorna se a sessão está autenticada (desbloqueada) |
 | `system::mem_stats()` | Retorna estatísticas de blocos e memória PM do processo |
 | `system::mem_write(bloco, offset, valor)` | Escreve texto ou número no bloco PM |
 | `system::mem_read(bloco, offset, tamanho)` | Lê dados da memória PM |
@@ -445,7 +456,7 @@ OS.terminate(0);
 O ObsidianOS simula o comportamento de falhas reais com alta fidelidade:
 
 ### Falhas em Cascata (Cascade Failure)
-Quando um processo ou serviço crítico encerra inesperadamente (ex: `csrss.obx`, `lsass.obx`, `dwm.obx`), o subsistema de falhas (`faults.ts`) propaga a quebra para todos os processos dependentes:
+Quando um processo ou serviço crítico encerra inesperadamente (ex: `csrss.osl`, `lsass.obx`, `dwm.osl`), o subsistema de falhas (`faults.ts`) propaga a quebra para todos os processos dependentes:
 1. `cascade:start`: Identificação da causa raiz e início da desestabilização.
 2. `cascade:step`: Notificação progressiva de processos que falharam na cadeia.
 3. Degradação Visual Dinâmica no BSOD via Canvas GDI:
