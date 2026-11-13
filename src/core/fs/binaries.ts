@@ -1,46 +1,5 @@
 export const binaryExes: [string, string, string, string][] = [
   [
-    'C:\\ObsidianOS\\System32\\ping.obx', 
-    'ping.obx', 
-    'C:\\ObsidianOS\\System32', 
-    `
-      const target = OS.args[0] || '127.0.0.1';
-      OS.print(\`Pinging \${target} with 32 bytes of data:\`);
-      for(let i=0; i<4; i++) {
-        await OS.wait(1000);
-        const res = OS.ping();
-        OS.print(\`Reply from \${target}: bytes=32 time=\${res.latency}ms TTL=128\`);
-      }
-      OS.terminate(0);
-    `
-  ],
-  [
-    'C:\\ObsidianOS\\System32\\ls.obx', 
-    'ls.obx', 
-    'C:\\ObsidianOS\\System32', 
-    `
-      const path = OS.args[0] || '.';
-      const files = OS.listFiles(path);
-      OS.print(\`Directory of \${path}:\`);
-      files.forEach(f => OS.print(\`  \${f}\`));
-      OS.terminate(0);
-    `
-  ],
-  [
-    'C:\\ObsidianOS\\System32\\sysinfo.obx', 
-    'sysinfo.obx', 
-    'C:\\ObsidianOS\\System32', 
-    `
-      const res = OS.getResources();
-      OS.print("--- SYSTEM INFORMATION ---");
-      OS.print(\`OS: \${OS.getEnv('OS')}\`);
-      OS.print(\`Memory: \${Math.floor(res.usedMemory)} MB / \${res.totalMemory} MB\`);
-      OS.print(\`Uptime: \${res.uptime} seconds\`);
-      OS.print(\`CPU Cores: \${res.cpuCores}\`);
-      OS.terminate(0);
-    `
-  ],
-  [
     'C:\\ObsidianOS\\System32\\bootmgr.obx',
     'bootmgr.obx',
     'C:\\ObsidianOS\\System32',
@@ -117,8 +76,8 @@ for (var d = 0; d < passiveDrivers.length; d++) {
   OS.addBootLog('  ✓ ' + passiveDrivers[d]);
 }
 OS.setBootPhase('SERVICE_INIT');
-OS.addBootLog('BootMgr: Spawning smss.obx (Session Manager)...');
-OS.spawn('smss.obx', 'Session Manager Subsystem', '⚙️', 'C:\\\\ObsidianOS\\\\System32\\\\smss.obx');
+OS.addBootLog('BootMgr: Spawning smss.osl (Session Manager)...');
+OS.spawn('smss.osl', 'Session Manager Subsystem', '⚙️', 'C:\\\\ObsidianOS\\\\System32\\\\smss.osl');
 OS.addBootLog('BootMgr: Enabling user session...');
 OS.finalizeBoot();
 OS.terminate(0);
@@ -184,77 +143,6 @@ OS.terminate(0);
     `.trim()
   ],
   [
-    'C:\\ObsidianOS\\System32\\smss.obx',
-    'smss.obx',
-    'C:\\ObsidianOS\\System32',
-    `
-OS.print('[smss] Session Manager Subsystem starting...');
-OS.registerCritical('SUBSYSTEM_INIT_FAILURE', 'Session Manager Subsystem failed. All subsystems collapsing.', 'smss.obx', '0x0000006E');
-OS.addBootLog('smss: Registering as critical process... OK');
-OS.addBootLog('smss: Spawning csrss.obx (Client Server Runtime)...');
-OS.spawn('csrss.obx', 'Client Server Runtime Process', '⚙️', 'C:\\\\ObsidianOS\\\\System32\\\\csrss.obx');
-await OS.wait(100);
-OS.addBootLog('smss: Spawning wininit.obx (Start-Up Application)...');
-OS.spawn('wininit.obx', 'ObsidianOS Start-Up Application', '⚙️', 'C:\\\\ObsidianOS\\\\System32\\\\wininit.obx');
-await OS.wait(100);
-OS.addBootLog('smss: Spawning lsass.obx (Security Authority)...');
-OS.spawn('lsass.obx', 'Local Security Authority Process', '🔒', 'C:\\\\ObsidianOS\\\\System32\\\\lsass.obx');
-await OS.wait(100);
-OS.addBootLog('smss: All subsystems spawned. Session manager ready.');
-OS.print('[smss] All subsystems spawned. Ready.');
-// smss stays alive — it IS the session manager
-while (true) { await OS.wait(5000); }
-    `.trim()
-  ],
-  [
-    'C:\\ObsidianOS\\System32\\csrss.obx',
-    'csrss.obx',
-    'C:\\ObsidianOS\\System32',
-    `
-OS.print('[csrss] Client Server Runtime Process starting...');
-OS.registerCritical('WIN32K_SUBSYSTEM_FATAL', 'Client Server Runtime Process terminated. Win32 subsystem non-functional.', 'csrss.obx', '0x0000007E');
-OS.declareDependency('smss.obx');
-OS.addBootLog('csrss: Registered as critical, depends on smss.');
-// csrss is the window/thread manager — it stays alive providing services
-OS.print('[csrss] Win32 subsystem ready.');
-while (true) { await OS.wait(5000); }
-    `.trim()
-  ],
-  [
-    'C:\\ObsidianOS\\System32\\wininit.obx',
-    'wininit.obx',
-    'C:\\ObsidianOS\\System32',
-    `
-OS.print('[wininit] Start-Up Application starting...');
-OS.registerCritical('STARTUP_INIT_FAILED', 'Windows Start-Up Application failed during initialization.', 'wininit.obx', '0x0000005F');
-OS.declareDependency('smss.obx');
-OS.addBootLog('wininit: Registered as critical, depends on smss.');
-OS.addBootLog('wininit: Spawning services.obx (Service Control Manager)...');
-OS.spawn('services.obx', 'Services and Controller App', '⚙️', 'C:\\\\ObsidianOS\\\\System32\\\\services.obx');
-await OS.wait(100);
-OS.addBootLog('wininit: services.obx started.');
-// wininit stays alive
-while (true) { await OS.wait(5000); }
-    `.trim()
-  ],
-  [
-    'C:\\ObsidianOS\\System32\\services.obx',
-    'services.obx',
-    'C:\\ObsidianOS\\System32',
-    `
-OS.print('[services] Service Control Manager starting...');
-OS.registerCritical('SERVICE_CONTROLLER_FAILED', 'Services and Controller App terminated. No services can run.', 'services.obx', '0x000000BE');
-OS.declareDependency('wininit.obx');
-OS.addBootLog('services: Registered as critical, depends on wininit.');
-OS.addBootLog('services: Spawning svchost.obx (Service Host)...');
-OS.spawn('svchost.obx', 'Service Host: Local System', '⚙️', 'C:\\\\ObsidianOS\\\\System32\\\\svchost.obx');
-await OS.wait(100);
-OS.addBootLog('services: svchost.obx started. Service Control Manager ready.');
-// services stays alive — monitors service health
-while (true) { await OS.wait(5000); }
-    `.trim()
-  ],
-  [
     'C:\\ObsidianOS\\System32\\lsass.obx',
     'lsass.obx',
     'C:\\ObsidianOS\\System32',
@@ -290,90 +178,6 @@ OS.addBootLog('lsass: Authentication subsystem ready on PID ' + myPid);
 while (true) { await OS.wait(3000); }
     `.trim()
   ],
-  [
-    'C:\\ObsidianOS\\System32\\svchost.obx',
-    'svchost.obx',
-    'C:\\ObsidianOS\\System32',
-    `
-OS.print('[svchost] Service Host: Local System starting...');
-OS.registerCritical('SERVICE_HOST_DIED', 'Service Host process terminated unexpectedly.', 'svchost.obx', '0x000000D1');
-OS.declareDependency('services.obx');
-OS.addBootLog('svchost: Registered as critical, depends on services.');
-OS.addBootLog('svchost: Hosting system services...');
-// svchost stays alive — hosts generic services
-while (true) { await OS.wait(5000); }
-    `.trim()
-  ],
-  [
-    'C:\\ObsidianOS\\System32\\dwm.obx',
-    'dwm.obx',
-    'C:\\ObsidianOS\\System32',
-    `
-OS.print('[dwm] Desktop Window Manager starting...');
-OS.registerCritical('GRAPHICS_SUBSYSTEM_FAILED', 'Desktop Window Manager crashed. Display composition unavailable.', 'dwm.obx', '0x000000EA');
-OS.declareDependency('csrss.obx');
-OS.addBootLog('dwm: Registered as critical, depends on csrss.');
-OS.addBootLog('dwm: Desktop composition ready.');
-while (true) { await OS.wait(5000); }
-    `.trim()
-  ],
-  [
-    'C:\\ObsidianOS\\System32\\explorer.obx',
-    'explorer.obx',
-    'C:\\ObsidianOS\\System32',
-    `
-OS.print('[explorer] ObsidianOS Explorer starting...');
-OS.registerCritical('SHELL_FAILED', 'Windows Shell (explorer) terminated. User interface is gone.', 'explorer.obx', '0x000000F4');
-OS.declareDependency('dwm.obx');
-OS.addBootLog('explorer: Registered as critical, depends on dwm.');
-OS.addBootLog('explorer: Desktop shell ready.');
-while (true) { await OS.wait(5000); }
-    `.trim()
-  ],
-  [
-    'C:\\ObsidianOS\\System32\\cmd.osl',
-    'cmd.osl',
-    'C:\\ObsidianOS\\System32',
-    `
-system::log("ObsidianOS Shell [Version 1.0.0]");
-system::log("(c) Obsidian Corporation. All rights reserved.");
-
-while (true) {
-  let cwd = system::fs_getcwd();
-  system::log("");
-  system::log(cwd + "> ");
-
-  let input = system::stdin();
-
-  if (input == "help") {
-    system::log("Comandos disponiveis:");
-    system::log("  ls    - Listar arquivos");
-    system::log("  cd    - Mudar diretorio");
-    system::log("  echo  - Exibir texto");
-    system::log("  mem   - Memoria PM do shell (mem::stats())");
-    system::log("  pmsnap   - Salvar memoria em .pmem");
-    system::log("  pmresume - Restaurar memoria do .pmem");
-    system::log("  pmaudit  - Razao vs lastro da RAM");
-    system::log("  help  - Mostrar esta ajuda");
-    system::log("  exit  - Sair do shell");
-  } else if (input == "ls") {
-    let files = system::fs_list("");
-    system::log(files);
-  } else if (input == "mem") {
-    system::log(system::mem_stats());
-  } else if (input == "pmsnap") {
-    system::log(system::mem_snap());
-  } else if (input == "pmresume") {
-    system::log(system::mem_resume());
-  } else if (input == "pmaudit") {
-    system::log(system::mem_audit());
-  } else if (input == "exit") {
-    return 0;
-  } else if (input == "") {
-  } else {
-    system::log("Comando nao reconhecido: " + input);
-  }
-}
-    `.trim()
-  ],
 ];
+
+

@@ -14,7 +14,7 @@ import { appExes } from './fs/apps';
 import { binaryExes } from './fs/binaries';
 import { sdkFiles } from './fs/sdk';
 import { userFiles } from './fs/user';
-import { oslScripts } from './fs/osl.ts';
+import { oslScripts } from './fs/osl';
 
 
 

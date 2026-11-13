@@ -3,62 +3,11 @@ import { SYSTEM_PMEM_B64 } from '../pm/system-image';
 
 export const systemExes: [string, string, string, string, string?][] = [
   ['C:\\ObsidianOS\\System32\\ntoskrnl.obx', 'ntoskrnl.obx', 'C:\\ObsidianOS\\System32', 'ObsidianOS NT Kernel'],
-  ['C:\\ObsidianOS\\System32\\csrss.obx', 'csrss.obx', 'C:\\ObsidianOS\\System32', 'Client/Server Runtime Subsystem'],
-  ['C:\\ObsidianOS\\System32\\smss.obx', 'smss.obx', 'C:\\ObsidianOS\\System32', 'Session Manager Subsystem'],
-  [
-    'C:\\ObsidianOS\\System32\\obslogon.obx', 
-    'obslogon.obx', 
-    'C:\\ObsidianOS\\System32', 
-    'Obsidian Logon Application',
-    `
-async function main() {
-    OS.print("ObsLogon: Iniciando subsistema de segurança...");
-    let setupRun;
-    try {
-        setupRun = OS.Registry.GetValue('HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\Setup', 'SetupInProgress');
-        OS.print("ObsLogon: Registro lido. SetupInProgress = " + setupRun);
-    } catch(e) {
-        OS.print("ObsLogon: Falha ao ler registro de setup. Assumindo WINLOGON.");
-        setupRun = 0;
-    }
-    if (setupRun === 1) {
-        OS.print("ObsLogon: OOBE detectado. Iniciando Setup Wizard...");
-        OS.Kernel.SetBootPhase('OOBE');
-    } else {
-        OS.print("ObsLogon: Sistema configurado. Aguardando autenticação...");
-        OS.Kernel.SetBootPhase('WINLOGON');
-    }
-    while (true) {
-        try {
-            const auth = OS.User.IsAuthenticated();
-            if (auth) {
-                OS.print("ObsLogon: Usuário autenticado. Carregando Shell...");
-                OS.Kernel.SetBootPhase('DESKTOP_READY');
-                OS.Process.Create('explorer.obx', 'ObsidianOS Shell', 'C:\\\\ObsidianOS\\\\System32\\\\explorer.obx');
-                break; 
-            }
-        } catch(e) {
-            OS.print("ObsLogon: Erro no loop de monitoramento: " + e.message);
-        }
-        await OS.Utils.Sleep(800);
-    }
-}
-main().catch(err => {
-    OS.print("CRITICAL_LOGON_FAILURE: " + err);
-    while(true) { }
-});
-    `.trim()
-  ],
-  ['C:\\ObsidianOS\\System32\\services.obx', 'services.obx', 'C:\\ObsidianOS\\System32', 'Services and Controller App'],
   ['C:\\ObsidianOS\\System32\\lsass.obx', 'lsass.obx', 'C:\\ObsidianOS\\System32', 'Local Security Authority Process'],
-  ['C:\\ObsidianOS\\System32\\svchost.obx', 'svchost.obx', 'C:\\ObsidianOS\\System32', 'Host Process for Services'],
-  ['C:\\ObsidianOS\\System32\\dwm.obx', 'dwm.obx', 'C:\\ObsidianOS\\System32', 'Desktop Window Manager'],
-  ['C:\\ObsidianOS\\System32\\explorer.obx', 'explorer.obx', 'C:\\ObsidianOS\\System32', 'ObsidianOS Shell'],
   ['C:\\ObsidianOS\\System32\\conhost.obx', 'conhost.obx', 'C:\\ObsidianOS\\System32', 'Console Window Host'],
   ['C:\\ObsidianOS\\System32\\SearchHost.obx', 'SearchHost.obx', 'C:\\ObsidianOS\\System32', 'Search Host Process'],
   ['C:\\ObsidianOS\\System32\\RuntimeBroker.obx', 'RuntimeBroker.obx', 'C:\\ObsidianOS\\System32', 'Runtime Broker'],
   ['C:\\ObsidianOS\\System32\\spoolsv.obx', 'spoolsv.obx', 'C:\\ObsidianOS\\System32', 'Print Spooler Service'],
-  ['C:\\ObsidianOS\\System32\\wininit.obx', 'wininit.obx', 'C:\\ObsidianOS\\System32', 'ObsidianOS Start-Up Application'],
   ['C:\\ObsidianOS\\System32\\fontdrvhost.obx', 'fontdrvhost.obx', 'C:\\ObsidianOS\\System32', 'User-mode Font Driver Host'],
   ['C:\\ObsidianOS\\System32\\sihost.obx', 'sihost.obx', 'C:\\ObsidianOS\\System32', 'Shell Infrastructure Host'],
   ['C:\\ObsidianOS\\System32\\taskhostw.obx', 'taskhostw.obx', 'C:\\ObsidianOS\\System32', 'Task Host Window'],

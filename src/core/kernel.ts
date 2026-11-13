@@ -14,6 +14,7 @@ import { opfsDriver, type OPFSDriver } from './opfsDriver';
 import { Lexer } from './osl/lexer';
 import { Parser } from './osl/parser';
 import { Interpreter } from './osl/interpreter';
+import { VirtualMachine } from './osl/vm/vm';
 
 // ── Modular kernel: composed managers (see src/core/kernel/) ───────────────
 import type { BootPhase, BSODInfo, DriverEntry, KernelLogLevel, ServiceEntry } from './kernel/types';
@@ -164,6 +165,10 @@ class Kernel {
     } finally {
       this._powerOnPromise = null;
     }
+  }
+
+  powerOff(): void {
+    this.bootPhase = 'OFF';
   }
 
   private async runPowerOn(): Promise<void> {
@@ -319,14 +324,15 @@ class Kernel {
     if (this._shellLoaded) return true;
     this._shellLoaded = true;
 
-    const explorer = this.fsGetNode('C:\\ObsidianOS\\System32\\explorer.obx');
+    const explorer = this.fsGetNode('C:\\ObsidianOS\\System32\\explorer.osl')
+                  || this.fsGetNode('C:\\ObsidianOS\\System32\\explorer.obx');
     if (!explorer) {
       this.triggerBSOD({
         stopCode: 'SHELL_INITIALIZATION_FAILED',
-        technicalInfo: 'explorer.obx not found. Cannot load desktop shell.',
-        failedComponent: 'explorer.obx',
+        technicalInfo: 'explorer.osl not found. Cannot load desktop shell.',
+        failedComponent: 'explorer.osl',
         bugCheckCode: '0x000000F4',
-        parameters: ['explorer.obx', 'C:\\ObsidianOS\\System32'],
+        parameters: ['explorer.osl', 'C:\\ObsidianOS\\System32'],
       });
       return false;
     }
@@ -343,7 +349,8 @@ class Kernel {
     await this.scanSystemApps(fsProxy, registryProxy);
     
     // Create processes (memória contabilizada no createProcess + lastro PM)
-    this.createProcess('explorer.obx', 'ObsidianOS Explorer', '📁');
+    this.createProcess('explorer.osl', 'ObsidianOS Explorer', '📁');
+
 
     const dwm = this.fsGetNode('C:\\ObsidianOS\\System32\\dwm.obx');
     if (dwm) {
@@ -584,14 +591,41 @@ class Kernel {
     this._system.updateUserProfile(profile);
   }
 
+  /**
+   * Reseta e formata o sistema: limpa o OPFS virtual e o localStorage,
+   * recarregando a página e reinstalando o sistema de fábrica.
+   */
+  async resetSystem(prompt: boolean = false): Promise<void> {
+    if (prompt && typeof window !== 'undefined') {
+      const confirm = window.confirm(
+        'ATENÇÃO: TEM CERTEZA ABSOLUTA? Isso irá limpar seu disco virtual (OPFS) e dados da página, reinstalando o sistema operacional ObsidianOS do zero.'
+      );
+      if (!confirm) return;
+    }
+    try {
+      if (typeof navigator !== 'undefined' && navigator?.storage?.getDirectory) {
+        const d = await navigator.storage.getDirectory();
+        for await (const [n] of (d as any).entries()) {
+          await d.removeEntry(n, { recursive: true });
+        }
+      }
+    } catch (e) {
+      console.error('Failed to wipe OPFS directory:', e);
+    } finally {
+      if (typeof localStorage !== 'undefined') localStorage.clear();
+      if (typeof sessionStorage !== 'undefined') sessionStorage.clear();
+      if (typeof window !== 'undefined') window.location.reload();
+    }
+  }
+
   // NOTE: credential validation lives in SystemState.validateCredentials and is
   // exercised by SystemState.login — no dead validators here.
 
   async sysAuthenticateUser(username: string, password: string): Promise<boolean> {
     const lsassPid = this._processesByName.get('lsass.obx')?.pid;
     if (lsassPid === undefined) {
-      this.log('WARN', 'Kernel', 'lsass.obx is dead — authentication service unavailable');
-      return false;
+      this.log('WARN', 'Kernel', 'lsass.obx is dead — using local credential validation');
+      return this._system.validateCredentials(username, password);
     }
 
     return new Promise<boolean>((resolve) => {
@@ -609,8 +643,8 @@ class Kernel {
         if (settled) return;
         settled = true;
         cleanup();
-        this.log('WARN', 'Kernel', 'lsass auth request timed out');
-        resolve(false);
+        this.log('WARN', 'Kernel', 'lsass auth request timed out — fallback to local validation');
+        resolve(this._system.validateCredentials(username, password));
       }, this._lsassAuthTimeout);
 
       this.emit(`ipc:${lsassPid}:auth:request`, {
@@ -630,6 +664,11 @@ class Kernel {
 
   sysUnlock() {
     this._system.unlock();
+  }
+
+  /** Estado de bloqueio da sessão (usado pelos syscalls is_authenticated de OSL/OVM). */
+  sysIsLocked(): boolean {
+    return this._system.locked;
   }
 
   sysSetTheme(updates: Partial<SystemTheme>) {
@@ -1374,6 +1413,30 @@ class Kernel {
       }
     }
 
+    // --- OVM BYTECODE EXECUTION (.obx compilado) ---
+    if (typeof node.content === 'string' && node.content.startsWith('{"magic":"OBX')) {
+      try {
+        const bytecodeModule = JSON.parse(node.content);
+        const vm = new VirtualMachine(pid, args);
+        vm.run(bytecodeModule).then(() => {
+          vm.dispose();
+          this.log('INFO', 'OVM', `Bytecode module ${node.name} finished execution.`);
+          this.terminateProcess(pid);
+        }).catch(err => {
+          vm.dispose();
+          this.log('ERROR', 'OVM', `Runtime Error in ${node.name}: ${err.message}`);
+          this.emit('process:stderr', { pid, message: `OVM Runtime Error: ${err.message}` });
+          this.terminateProcess(pid);
+        });
+        return;
+      } catch (err: any) {
+        this.log('ERROR', 'OVM', `Load Error in ${node.name}: ${err.message}`);
+        this.emit('process:stderr', { pid, message: `OVM Load Error: ${err.message}` });
+        this.terminateProcess(pid);
+        return;
+      }
+    }
+
     // --- OSL SCRIPT EXECUTION ---
     if (path.endsWith('.osl') || path.endsWith('.obx') && node.content && node.content.startsWith('system::')) {
       try {
@@ -1382,13 +1445,15 @@ class Kernel {
         const tokens = lexer.tokenize();
         const parser = new Parser(tokens);
         const ast = parser.parse();
-        const interpreter = new Interpreter(pid);
+        const interpreter = new Interpreter(pid, args);
         
         // Execute asynchronously
         interpreter.interpret(ast).then(() => {
+          interpreter.dispose();
           this.log('INFO', 'OSL', `Script ${node.name} finished execution.`);
           this.terminateProcess(pid);
         }).catch(err => {
+          interpreter.dispose();
           this.log('ERROR', 'OSL', `Runtime Error in ${node.name}: ${err.message}`);
           this.emit('process:stderr', { pid, message: `Runtime Error: ${err.message}` });
           this.terminateProcess(pid);
@@ -1475,6 +1540,63 @@ class Kernel {
       this.log('ERROR', 'ExecutionEngine', `Spawn failed: ${err.message}`);
       this.terminateProcess(pid);
     }
+  }
+
+  /** Executa um binário OSL aguardando seu término — usado pelo syscall system::spawn() */
+  async executeBinaryWithArgs(pid: number, path: string, args: string[] = [], ppid: number = 0): Promise<void> {
+    // Definir ppid para que o Terminal possa identificar filhos do shell
+    const proc = this._processes.get(pid);
+    if (proc) proc.ppid = ppid;
+
+    return new Promise<void>((resolve) => {
+      const node = this.fsGetNode(path);
+      if (!node || !node.content) {
+        this.log('ERROR', 'OSL', `spawn: binary not found at '${path}'`);
+        this.terminateProcess(pid);
+        resolve();
+        return;
+      }
+      try {
+        const source = node.content as string;
+
+        // Se for módulo de bytecode compilado OVM (.obx)
+        if (source.startsWith('{"magic":"OBX')) {
+          const bytecodeModule = JSON.parse(source);
+          const vm = new VirtualMachine(pid, args);
+          vm.run(bytecodeModule).then(() => {
+            vm.dispose();
+            this.terminateProcess(pid);
+            resolve();
+          }).catch((err: any) => {
+            vm.dispose();
+            this.log('ERROR', 'OVM', `spawn error in '${path}': ${err.message}`);
+            this.terminateProcess(pid);
+            resolve();
+          });
+          return;
+        }
+
+        const lexer  = new Lexer(source);
+        const tokens = lexer.tokenize();
+        const parser = new Parser(tokens);
+        const ast    = parser.parse();
+        const interp = new Interpreter(pid, args);
+        interp.interpret(ast).then(() => {
+          interp.dispose();
+          this.terminateProcess(pid);
+          resolve();
+        }).catch((err: any) => {
+          interp.dispose();
+          this.log('ERROR', 'OSL', `spawn error in '${path}': ${err.message}`);
+          this.terminateProcess(pid);
+          resolve();
+        });
+      } catch (err: any) {
+        this.log('ERROR', 'OSL', `spawn compile error in '${path}': ${err.message}`);
+        this.terminateProcess(pid);
+        resolve();
+      }
+    });
   }
 
   terminateProcess(pid: number) {
