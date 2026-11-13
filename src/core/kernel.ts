@@ -352,9 +352,9 @@ class Kernel {
     this.createProcess('explorer.osl', 'ObsidianOS Explorer', '📁');
 
 
-    const dwm = this.fsGetNode('C:\\ObsidianOS\\System32\\dwm.obx');
+    const dwm = this.fsGetNode('C:\\ObsidianOS\\System32\\dwm.osl');
     if (dwm) {
-      this.createProcess('dwm.obx', 'Desktop Window Manager', '🖥️');
+      this.createProcess('dwm.osl', 'Desktop Window Manager', '🖥️');
     }
 
     const searchHost = this.fsGetNode('C:\\ObsidianOS\\System32\\SearchHost.obx');
